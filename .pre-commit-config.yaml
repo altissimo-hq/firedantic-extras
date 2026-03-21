@@ -1,0 +1,63 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: debug-statements
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+
+  # Markdown linting
+  - repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: v0.43.0
+    hooks:
+      - id: markdownlint
+        args: ["--fix"]
+
+  # Python linting and formatting with ruff
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.4
+    hooks:
+      # Run the linter
+      - id: ruff
+        args: [--fix]
+      # Run the formatter
+      - id: ruff-format
+
+  # Type checking with mypy
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.15.0
+    hooks:
+      - id: mypy
+        files: ^src/
+        additional_dependencies:
+          - pydantic>=2.0
+          - types-protobuf
+
+  # Local hooks
+  - repo: local
+    hooks:
+      # Run unit tests (exit code 5 = no tests collected, which is OK)
+      - id: pytest-unit
+        name: Run unit tests
+        entry: bash -c 'poetry run pytest --tb=short; ret=$?; [ $ret -eq 5 ] && exit 0 || exit $ret'
+        language: system
+        pass_filenames: false
+        types: [python]
+
+  # Security scanning
+  - repo: https://github.com/twu/skjold
+    rev: v0.6.2
+    hooks:
+      - id: skjold
+
+  # Format non-Python files
+  - repo: https://github.com/pre-commit/mirrors-prettier
+    rev: v4.0.0-alpha.8
+    hooks:
+      - id: prettier
+        types_or: [yaml, json, markdown]
+        exclude: ^\.venv/
