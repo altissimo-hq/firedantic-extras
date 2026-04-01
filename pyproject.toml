@@ -62,6 +62,10 @@ select = ["E", "F", "I", "W", "UP"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not integration'"
+markers = [
+    "integration: marks tests that require the Firestore emulator (deselect with '-m \"not integration\"')",
+]
 
 [tool.skjold]
 sources = ["pypa"]
