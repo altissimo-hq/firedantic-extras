@@ -510,88 +510,163 @@ mapping Pydantic field types to their BigQuery equivalents.
 When you maintain Firedantic models as your source of truth for Firestore
 documents and also need to export that data to BigQuery, keeping schemas in
 sync manually is fragile. This module derives the BigQuery schema directly from
-your model definitions.
+your model definitions — including `REQUIRED`/`NULLABLE` mode based on whether
+Pydantic fields are required or optional, and `REPEATED` mode for list fields.
 
 ### Quick Start
 
 ```python
-from firedantic_extras.bigquery import model_to_bq_schema, models_to_bq_schemas
+from firedantic_extras.bigquery import model_to_bq_schema, schema_to_dict
 
 class Sample(Model):
     __collection__ = "samples"
-    sample_id: str
+    sample_id: str          # required → REQUIRED
     barcode: str
     collected_at: datetime
-    results: dict[str, float]
-    tags: list[str]
+    results: dict[str, float]   # dict → JSON
+    tags: list[str]             # list[str] → REPEATED STRING
+    notes: str | None = None    # optional → NULLABLE
 
-# Single model
 schema = model_to_bq_schema(Sample)
 # [
-#     SchemaField("sample_id", "STRING", mode="REQUIRED"),
-#     SchemaField("barcode", "STRING", mode="REQUIRED"),
-#     SchemaField("collected_at", "TIMESTAMP", mode="REQUIRED"),
-#     SchemaField("results", "RECORD", mode="REQUIRED", fields=[...]),
-#     SchemaField("tags", "STRING", mode="REPEATED"),
+#   SchemaField("id",           "STRING",    mode="NULLABLE"),   ← always first
+#   SchemaField("sample_id",    "STRING",    mode="REQUIRED"),
+#   SchemaField("barcode",      "STRING",    mode="REQUIRED"),
+#   SchemaField("collected_at", "TIMESTAMP", mode="REQUIRED"),
+#   SchemaField("results",      "JSON",      mode="NULLABLE"),
+#   SchemaField("tags",         "STRING",    mode="REPEATED"),
+#   SchemaField("notes",        "STRING",    mode="NULLABLE"),
 # ]
-
-# Multiple models → dict keyed by collection name
-schemas = models_to_bq_schemas([Sample, City])
-# {"samples": [...], "cities": [...]}
 ```
 
 ### Type Mapping
 
-| Python / Pydantic Type      | BigQuery Type            |
-| --------------------------- | ------------------------ |
-| `str`                       | `STRING`                 |
-| `int`                       | `INTEGER`                |
-| `float`                     | `FLOAT`                  |
-| `bool`                      | `BOOLEAN`                |
-| `datetime`                  | `TIMESTAMP`              |
-| `date`                      | `DATE`                   |
-| `time`                      | `TIME`                   |
-| `bytes`                     | `BYTES`                  |
-| `Decimal`                   | `NUMERIC`                |
-| `dict` / nested `BaseModel` | `RECORD`                 |
-| `list[T]`                   | `T` with mode `REPEATED` |
-| `Optional[T]`               | `T` with mode `NULLABLE` |
+| Python / Pydantic Type        | BigQuery Type     | Mode                |
+| ----------------------------- | ----------------- | ------------------- |
+| `str`, `Enum`, `Literal[...]` | `STRING`          | `REQUIRED/NULLABLE` |
+| `int`                         | `INTEGER`         | `REQUIRED/NULLABLE` |
+| `float`, `Decimal`            | `FLOAT`/`NUMERIC` | `REQUIRED/NULLABLE` |
+| `bool`                        | `BOOLEAN`         | `REQUIRED/NULLABLE` |
+| `datetime`                    | `TIMESTAMP`       | `REQUIRED/NULLABLE` |
+| `date`                        | `DATE`            | `REQUIRED/NULLABLE` |
+| `time`                        | `TIME`            | `REQUIRED/NULLABLE` |
+| `bytes`                       | `BYTES`           | `REQUIRED/NULLABLE` |
+| `dict` / `dict[str, X]`       | `JSON`            | `NULLABLE`          |
+| `Any` / unknown               | `JSON`            | `NULLABLE`          |
+| Nested `BaseModel`            | `RECORD`          | `REQUIRED/NULLABLE` |
+| `list[scalar]`                | scalar type       | `REPEATED`          |
+| `list[BaseModel]`             | `RECORD`          | `REPEATED`          |
+| `list[dict]` / `list[Any]`    | `JSON`            | `NULLABLE`          |
 
-### API
+**Mode rules:**
+
+- Required Pydantic field (`field: T`) → `REQUIRED`
+- `Optional[T]` / `T | None` / field with a default → `NULLABLE`
+- `list[T]` → `REPEATED` (BQ does not support `REQUIRED` for repeated fields)
+- `id` is always `STRING NULLABLE` (first field, regardless of model definition)
+
+### Backward Compatibility — `json_fields`
+
+When migrating from hand-written schemas where nested objects were stored as
+JSON, use `json_fields` to keep specific fields as `JSON NULLABLE` regardless
+of what the model says:
+
+```python
+# populations: list[Population] would normally → REPEATED RECORD
+# but our existing BQ table has it as JSON — keep it for now
+schema = model_to_bq_schema(Kit, json_fields={"populations", "acquired_from"})
+```
+
+This lets you migrate one table at a time without breaking existing queries.
+
+### Full API
 
 ```python
 def model_to_bq_schema(
-    model: type[Model],
+    model_class: type[BaseModel],
     *,
+    json_fields: set[str] | None = None,
     exclude_fields: set[str] | None = None,
     extra_fields: list[SchemaField] | None = None,
 ) -> list[SchemaField]:
-    """Generate a BigQuery schema from a Firedantic model.
+    """Generate a BigQuery schema from a Firedantic / Pydantic model.
 
     Args:
-        model: The Firedantic model class to convert.
-        exclude_fields: Field names to omit from the schema.
-        extra_fields: Additional SchemaFields to append (e.g., metadata
-            columns not in the model).
-
-    Returns:
-        A list of google.cloud.bigquery.SchemaField objects.
+        model_class: The Pydantic model class to introspect.
+        json_fields: Field names to force to JSON NULLABLE (backward-compat).
+        exclude_fields: Field names to omit from the schema entirely.
+        extra_fields: Additional SchemaFields to append at the end
+            (e.g., load-time metadata columns not in the model).
     """
 
 
 def models_to_bq_schemas(
-    models: list[type[Model]],
+    model_classes: list[type[BaseModel]],
     **kwargs,
 ) -> dict[str, list[SchemaField]]:
-    """Generate schemas for multiple models, keyed by collection name.
+    """Generate schemas for multiple models, keyed by __collection__ name.
 
     Args:
-        models: List of Firedantic model classes.
-        **kwargs: Passed through to model_to_bq_schema.
+        model_classes: Firedantic model classes (must have __collection__).
+        **kwargs: Forwarded to model_to_bq_schema.
 
     Returns:
         Dict mapping __collection__ names to their BigQuery schemas.
     """
+
+
+def schema_to_dict(schema: list[SchemaField]) -> list[dict]:
+    """Serialise a schema to a JSON-serialisable list of dicts.
+
+    Output matches the BigQuery REST API representation and can be stored
+    in a JSON file or round-tripped via Client.schema_from_json().
+    """
+
+
+def compare_schemas(
+    a: list[SchemaField],
+    b: list[SchemaField],
+) -> SchemaDiff:
+    """Diff two BigQuery schemas at the top level (field names and BQ types).
+
+    Useful for verifying a model-derived schema against an existing live BQ
+    table schema before cutting over from hand-written definitions.
+
+    Returns a SchemaDiff with:
+      .only_in_a       — fields in a but not b
+      .only_in_b       — fields in b but not a
+      .type_mismatches — [(field, type_in_a, type_in_b), ...]
+      .is_equal        — True if schemas are identical
+    """
+```
+
+### Migration Example for `json2bq`
+
+```python
+from firedantic_extras.bigquery.schema import model_to_bq_schema, compare_schemas
+
+# Map (dataset, table) to (ModelClass, fields_to_keep_as_json)
+MODEL_MAP = {
+    ("darwinsark", "kits"):    (Kit,    {"populations", "acquired_from"}),
+    ("darwinsark", "animals"): (Animal, {"consent", "breeds"}),
+    # tables without a model fall back to BQ autodetect (old behaviour)
+}
+
+def create_schema(dataset_name, table_name):
+    entry = MODEL_MAP.get((dataset_name, table_name))
+    if entry is None:
+        return None
+    model_class, json_fields = entry
+    return model_to_bq_schema(model_class, json_fields=json_fields)
+
+# Verify new schema matches existing table before switching over:
+existing = client.get_table("darwinsark.kits").schema
+generated = create_schema("darwinsark", "kits")
+diff = compare_schemas(existing, generated)
+if not diff.is_equal:
+    print("Fields only in live table:", diff.only_in_a)
+    print("Fields only in model:     ", diff.only_in_b)
+    print("Type mismatches:          ", diff.type_mismatches)
 ```
 
 ---

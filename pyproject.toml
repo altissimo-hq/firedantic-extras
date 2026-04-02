@@ -80,3 +80,10 @@ module = [
     "fastapi.*",
 ]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = [
+    "google.cloud.bigquery",
+    "google.cloud.bigquery.*",
+]
+ignore_missing_imports = true
