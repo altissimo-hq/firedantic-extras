@@ -11,11 +11,293 @@ Firedantic Extras is a companion library that provides higher-level utilities
 built on top of Firedantic models. Each module solves a specific, recurring
 problem that arises when using Firedantic in production:
 
-| Module                   | Purpose                                                       |
-| ------------------------ | ------------------------------------------------------------- |
-| **`update_collection`**  | Batch-sync a list of models to a Firestore collection         |
-| **`fastapi.pagination`** | Cursor-based pagination for Firedantic queries in FastAPI     |
-| **`bigquery.schema`**    | Generate BigQuery table schemas from Firedantic model classes |
+| Module                   | Purpose                                                               |
+| ------------------------ | --------------------------------------------------------------------- |
+| **`update_collection`**  | Batch-sync a list of models to a Firestore collection                 |
+| **`cursor_pagination`**  | Framework-agnostic cursor-based pagination for Firedantic models      |
+| **`query`**              | `count_model()` aggregation and `build_prefix_filters()` range search |
+| **`fastapi.pagination`** | FastAPI adapter (`PaginationParams`) for `cursor_paginate`            |
+| **`bigquery.schema`**    | Generate BigQuery table schemas from Firedantic model classes         |
+
+---
+
+## `cursor_pagination` — Cursor-Based Pagination
+
+Efficient, stable, bidirectional cursor pagination for any Firedantic model.
+Works independently of any web framework — use it from Flask, FastAPI,
+background workers, or anywhere else.
+
+### Why?
+
+`Model.find()` returns every document in the collection. For large collections
+this becomes slow and expensive. `cursor_paginate()` fetches only one page at a
+time using Firestore's `start_after` cursor, so response time stays constant no
+matter how many documents exist.
+
+Key design decisions:
+
+- **Document ID as cursor** — stable, type-safe, no field serialization needed.
+- **`__name__` tiebreaker** — a final `order_by("__name__")` prevents silent
+  deduplication at page boundaries when the primary sort field has duplicates.
+- **Reversed sort for `prev`** — backward pagination reverses all sort
+  directions and uses `start_after` (instead of `end_before + limit_to_last`),
+  which is fully supported by both the Firestore SDK and the emulator.
+- **Sentinel row** — requests `limit + 1` rows to determine `has_next` /
+  `has_prev` without an extra `COUNT` query.
+
+### Quick Start
+
+```python
+from firedantic import Model
+from firedantic_extras import cursor_paginate
+
+class Product(Model):
+    __collection__ = "products"
+    name: str
+    price: float
+    category: str
+
+# --- Page 1 (forward, no cursor) ---
+page = cursor_paginate(Product, limit=20, order_by="name")
+for p in page.items:
+    print(p.name)
+
+print(page.has_next)    # True  — more items exist
+print(page.has_prev)    # False — we're on the first page
+
+# --- Page 2 (next) ---
+page2 = cursor_paginate(
+    Product,
+    limit=20,
+    order_by="name",
+    cursor=page.next_cursor,
+    direction="next",
+)
+
+# --- Back to Page 1 (prev) ---
+page1_again = cursor_paginate(
+    Product,
+    limit=20,
+    order_by="name",
+    cursor=page2.prev_cursor,
+    direction="prev",
+)
+
+# --- Last page (no cursor, going backward) ---
+last_page = cursor_paginate(Product, limit=20, order_by="name", direction="prev")
+print(last_page.has_next)  # False — nothing after this
+print(last_page.has_prev)  # True  — earlier pages exist
+```
+
+### Filtering
+
+Pass a `filter_` dict using the same format as `Model.find()`:
+
+```python
+# Equality filter
+page = cursor_paginate(
+    Product,
+    limit=20,
+    order_by="name",
+    filter_={"category": "electronics"},
+)
+
+# Comparison operators
+page = cursor_paginate(
+    Product,
+    limit=20,
+    order_by=[("price", "ASCENDING"), ("name", "ASCENDING")],
+    filter_={"price": {">=": 10.0, "<": 100.0}},
+)
+```
+
+### Compound Sort
+
+Pass a list of `(field, direction)` tuples for multi-field ordering:
+
+```python
+from google.cloud.firestore_v1 import ASCENDING, DESCENDING
+
+page = cursor_paginate(
+    Product,
+    limit=20,
+    order_by=[("category", ASCENDING), ("price", DESCENDING)],
+)
+```
+
+### Include Total Count
+
+```python
+page = cursor_paginate(Product, limit=20, order_by="name", include_total=True)
+print(page.total)  # e.g. 4231 — one extra server-side COUNT aggregation
+```
+
+### API Reference
+
+```python
+def cursor_paginate(
+    model_class: type[BareModel],
+    *,
+    limit: int,
+    order_by: str | list[str | tuple[str, str]] | None = None,
+    cursor: str | None = None,
+    direction: Literal["next", "prev"] = "next",
+    filter_: FilterDict | None = None,
+    include_total: bool = False,
+) -> CursorPage[BareModel]:
+    ...
+```
+
+| Parameter       | Default  | Description                                                                                     |
+| --------------- | -------- | ----------------------------------------------------------------------------------------------- |
+| `model_class`   | _(req.)_ | The Firedantic model class to query                                                             |
+| `limit`         | _(req.)_ | Number of items per page (≥ 1)                                                                  |
+| `order_by`      | `None`   | Field name, or list of `(field, direction)` tuples. A `__name__` tiebreaker is always appended. |
+| `cursor`        | `None`   | Document ID from a previous page's `next_cursor` or `prev_cursor`                               |
+| `direction`     | `"next"` | `"next"` to go forward, `"prev"` to go backward                                                 |
+| `filter_`       | `None`   | Equality / comparison filters in Firedantic's `find()` format                                   |
+| `include_total` | `False`  | If `True`, runs an extra server-side `COUNT` aggregation and populates `CursorPage.total`       |
+
+```python
+@dataclass
+class CursorPage(Generic[ModelT]):
+    items: list[ModelT]       # hydrated model instances for this page
+    has_next: bool            # True if a next page exists (going forward)
+    has_prev: bool            # True if a previous page exists (going backward)
+    next_cursor: str | None   # pass as cursor + direction="next" to advance
+    prev_cursor: str | None   # pass as cursor + direction="prev" to go back
+    total: int | None         # total doc count, only set when include_total=True
+```
+
+---
+
+## `query` — Count and Prefix Search
+
+### `count_model` — Server-Side Aggregation
+
+Get the number of documents matching a filter without fetching any data:
+
+```python
+from firedantic_extras import count_model
+
+# Count all documents in a collection
+total = count_model(Product)
+
+# Count with a filter
+electronics_count = count_model(Product, filter_={"category": "electronics"})
+```
+
+Uses Firestore's native `COUNT` aggregation — no documents are transferred.
+
+```python
+def count_model(
+    model_class: type[BareModel],
+    *,
+    filter_: FilterDict | None = None,
+) -> int:
+    ...
+```
+
+### `build_prefix_filters` — Prefix-Range Search
+
+Generate a pair of Firedantic-compatible filters that implement a prefix search
+using Firestore's range query pattern:
+
+```python
+from firedantic_extras import build_prefix_filters, cursor_paginate
+
+# Find all products whose name starts with "lap"
+filters = build_prefix_filters("name", "lap")
+# Returns: {"name": {">=": "lap", "<": "lap\uf8ff"}}
+
+page = cursor_paginate(
+    Product,
+    limit=20,
+    order_by="name",
+    filter_=filters,
+)
+```
+
+The upper bound uses the Unicode sentinel `\uf8ff` (the highest character in
+the Basic Multilingual Plane), so any string that starts with the prefix sorts
+before it.
+
+```python
+def build_prefix_filters(field: str, prefix: str) -> FilterDict:
+    ...
+```
+
+---
+
+## `fastapi.pagination` — FastAPI Adapter
+
+`PaginationParams` is a FastAPI dependency that extracts `cursor`, `direction`,
+and `limit` from query-string parameters, ready to pass straight to
+`cursor_paginate`.
+
+### Quick Start
+
+```python
+from fastapi import Depends, FastAPI
+from firedantic_extras import cursor_paginate, CursorPage
+from firedantic_extras.fastapi.pagination import PaginationParams
+
+app = FastAPI()
+
+class Product(Model):
+    __collection__ = "products"
+    name: str
+    price: float
+    category: str
+
+@app.get("/products")
+def list_products(
+    pagination: PaginationParams = Depends(),
+    category: str | None = None,
+) -> CursorPage[Product]:
+    filter_ = {"category": category} if category else None
+    return cursor_paginate(
+        Product,
+        limit=pagination.limit,
+        order_by="name",
+        cursor=pagination.cursor,
+        direction=pagination.direction,
+        filter_=filter_,
+    )
+```
+
+**Request examples:**
+
+```http
+GET /products?limit=20
+GET /products?limit=20&cursor=<next_cursor>&direction=next
+GET /products?limit=20&cursor=<prev_cursor>&direction=prev
+```
+
+**Response:**
+
+```json
+{
+  "items": [ ... ],
+  "has_next": true,
+  "has_prev": false,
+  "next_cursor": "abc123",
+  "prev_cursor": null,
+  "total": null
+}
+```
+
+### API
+
+```python
+class PaginationParams:
+    def __init__(
+        self,
+        cursor: str | None = Query(default=None),
+        direction: Literal["next", "prev"] = Query(default="next"),
+        limit: int = Query(default=20, ge=1, le=500),
+    ) -> None: ...
+```
 
 ## Installation
 
@@ -215,103 +497,6 @@ def build_sync_plan(
 ) -> _SyncPlan:
     """Compute adds/updates/deletes/skips from pure data — no Firestore calls."""
 ```
-
----
-
-## `fastapi.pagination` — Cursor-Based Pagination
-
-Integrates Firedantic queries with
-[fastapi-pagination](https://github.com/uriyyo/fastapi-pagination) to provide
-Firestore-native cursor-based pagination for API endpoints.
-
-### Why?
-
-Firestore does not support offset-based pagination efficiently — it still reads
-and charges for all skipped documents. Cursor-based pagination using
-`start_after` is the idiomatic approach, and this module bridges the gap
-between Firedantic's query interface and FastAPI's pagination framework.
-
-### Quick Start
-
-```python
-from fastapi import Depends, FastAPI
-from fastapi_pagination.cursor import CursorPage, CursorParams
-
-from firedantic_extras.fastapi import paginate
-
-app = FastAPI()
-
-class Product(Model):
-    __collection__ = "products"
-    name: str
-    price: float
-    category: str
-    created_at: datetime
-
-
-@app.get("/products", response_model=CursorPage[Product])
-def list_products(
-    params: CursorParams = Depends(),
-    category: str | None = None,
-):
-    filter_dict = {"category": category} if category else None
-    return paginate(Product, params, filter_dict=filter_dict, sort_field="created_at")
-```
-
-**Request:**
-
-```http
-GET /products?size=10
-GET /products?size=10&cursor=eyJpZCI6ICJhYmMxMjMiLCAidmFsIjogIi4uLiIsICJkaXIiOiAibmV4dCJ9
-```
-
-**Response:**
-
-```json
-{
-  "items": [ ... ],
-  "next_cursor": "eyJpZCI6ICJ4eXo3ODkiLCAidmFsIjogIi4uLiIsICJkaXIiOiAibmV4dCJ9",
-  "previous_cursor": null
-}
-```
-
-### API
-
-```python
-def paginate(
-    model_cls: type[Model],
-    params: CursorParams,
-    filter_dict: dict[str, Any] | None = None,
-    sort_field: str = "created_at",
-) -> CursorPage[Model]:
-    """Paginate a Firedantic model using Firestore cursors.
-
-    Uses fastapi-pagination's CursorPage/CursorParams for seamless
-    integration with FastAPI endpoints.
-
-    Args:
-        model_cls: The Firedantic model class to query.
-        params: CursorParams from fastapi-pagination (size, cursor).
-        filter_dict: Optional equality filters applied as .where() clauses.
-        sort_field: Field to order results by (must have a Firestore index).
-
-    Returns:
-        A CursorPage containing items and navigation cursors.
-    """
-```
-
-```python
-def encode_cursor(id_: str, val: Any, direction: str) -> str:
-    """Encode cursor data (doc id, sort value, direction) to base64."""
-
-def decode_cursor(cursor: str) -> dict[str, Any]:
-    """Decode a base64 cursor. Raises HTTP 400 on invalid format."""
-```
-
-**Navigation:** The cursor encodes the document ID, sort field value, and
-direction (`"next"` or `"prev"`). Bidirectional navigation is supported —
-the response includes both `next_cursor` and `previous_cursor` when
-applicable.
 
 ---
 
