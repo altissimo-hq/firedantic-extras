@@ -69,3 +69,14 @@ markers = [
 
 [tool.skjold]
 sources = ["pypa"]
+
+[tool.mypy]
+strict = false
+ignore_missing_imports = false
+
+[[tool.mypy.overrides]]
+module = [
+    "fastapi",
+    "fastapi.*",
+]
+ignore_missing_imports = true
