@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "firedantic-extras"
-version = "0.1.0"
+version = "0.1.1"
 description = "Add-on utilities for Firedantic: collection sync, FastAPI pagination, BigQuery schema generation"
 authors = ["Lukas Karlsson <karlsson@altissimo.io>"]
 license = "BSD-3-Clause"
@@ -20,7 +20,7 @@ classifiers = [
 
 [tool.poetry.dependencies]
 python = "^3.10"
-firedantic = { git = "https://github.com/altissimo-hq/firedantic.git", branch = "main" }
+firedantic = ">=0.13"
 google-cloud-firestore = ">=2.0"
 pydantic = ">=2.0"
 
