@@ -72,14 +72,25 @@ def firestore_client() -> Client:
 
 @pytest.fixture(scope="session")
 def configure_firedantic(firestore_client: Client) -> None:
-    """Register a firedantic configuration backed by the emulator.
+    """Register firedantic configurations backed by the emulator.
 
     Uses the session-scoped ``firestore_client`` so only one client is
     created for the entire test run.
     """
+    # Default configuration
     configuration.add(
+        name="(default)",
         prefix=COLLECTION_PREFIX,
         project=EMULATOR_PROJECT,
+        credentials=Mock(spec=google.auth.credentials.Credentials),
+    )
+
+    # Backup configuration for testing multi-db routing
+    configuration.add(
+        name="backup",
+        prefix=COLLECTION_PREFIX,
+        project=EMULATOR_PROJECT,
+        database="backup",
         credentials=Mock(spec=google.auth.credentials.Credentials),
     )
 

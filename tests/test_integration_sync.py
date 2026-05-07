@@ -305,3 +305,26 @@ class TestCollectionSyncEndToEnd:
         summary = result.summary()
         assert "adds=1" in summary
         assert "updates=0" in summary
+
+    def test_sync_to_non_default_database(self, configure_firedantic):
+        """Verify that a model with __db_config__ routes to the correct database."""
+
+        class BackupUser(User):
+            __collection__ = "users"
+            __db_config__ = "backup"
+
+        # Note: We don't use clean_collection because it uses the default client.
+        # Since the emulator collapses all DBs into (default) currently, it doesn't matter,
+        # but for correctness we'll just use unique IDs.
+        uid = f"backup-{pytest.importorskip('uuid').uuid4()}"
+        desired = [BackupUser(id=uid, name="Backup Alice", email="backup@e.com")]
+
+        # This should use the 'backup' client/database
+        result = CollectionSync.sync(BackupUser, desired, output_writer=None)
+
+        assert result.adds == 1
+        assert result.total_changes == 1
+
+        # Verify it can be found via the BackupUser model
+        found = BackupUser.get_by_id(uid)
+        assert found.name == "Backup Alice"

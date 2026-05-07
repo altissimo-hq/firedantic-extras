@@ -1,6 +1,6 @@
 """Firedantic Extras: add-on utilities for Firedantic."""
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 from firedantic_extras.cursor_pagination import CursorPage, cursor_paginate
 from firedantic_extras.query import build_prefix_filters, count_model
