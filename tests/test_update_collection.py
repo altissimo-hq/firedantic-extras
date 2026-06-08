@@ -216,7 +216,7 @@ class TestBuildSyncPlan:
             doc_id_field="id",
         )
         assert len(plan.to_update) == 1
-        doc_id, model = plan.to_update[0]
+        doc_id, _model = plan.to_update[0]
         assert doc_id == "u1"
         assert plan.to_skip == []
         assert plan.to_add == []

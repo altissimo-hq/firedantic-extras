@@ -7,9 +7,7 @@ They exercise type introspection and the public API surface.
 from __future__ import annotations
 
 import enum
-from datetime import date, datetime
-from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from google.cloud.bigquery import SchemaField
@@ -21,6 +19,10 @@ from firedantic_extras.bigquery.schema import (
     models_to_bq_schemas,
     schema_to_dict,
 )
+
+if TYPE_CHECKING:
+    from datetime import date, datetime
+    from decimal import Decimal
 
 # ---------------------------------------------------------------------------
 # Helpers

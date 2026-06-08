@@ -35,7 +35,7 @@ try:
     from fastapi import Query
 except ImportError as exc:  # pragma: no cover
     raise ImportError(
-        "fastapi is required to use firedantic_extras.fastapi.pagination. " "Install it with: pip install fastapi"
+        "fastapi is required to use firedantic_extras.fastapi.pagination. Install it with: pip install fastapi"
     ) from exc
 
 # Re-export the core types so callers can use a single import.
@@ -61,7 +61,7 @@ class PaginationParams:
                    response's ``next_cursor`` or ``prev_cursor``).
         direction: ``"next"`` (default) to move forward; ``"prev"`` to
                    move backward.
-        limit:     Number of items per page (1–500, default 50).
+        limit:     Number of items per page (1-500, default 50).
 
     Example::
 
@@ -93,7 +93,7 @@ class PaginationParams:
             50,
             ge=1,
             le=500,
-            description="Number of items per page (1–500).",
+            description="Number of items per page (1-500).",
         ),
     ) -> None:
         self.cursor = cursor

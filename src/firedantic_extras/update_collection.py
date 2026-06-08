@@ -32,12 +32,15 @@ UpdateCollection     Backward-compatible alias for CollectionSync.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
-from firedantic._sync.model import BareModel
 from firedantic.configurations import configuration
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator, Sequence
+
+    from firedantic._sync.model import BareModel
 
 logger = logging.getLogger(__name__)
 
@@ -436,7 +439,7 @@ def _fetch_existing(
             elif on_duplicate_keys == "update_all":
                 # Add each duplicate under a disambiguated key so build_sync_plan
                 # sees them as separate entries and updates all of them.
-                for i, (doc_id, model_instance, raw) in enumerate(docs):
+                for i, (_doc_id, model_instance, raw) in enumerate(docs):
                     disambig = f"{key_value}\x00dup{i}"
                     existing_models[disambig] = model_instance
                     existing_raw[disambig] = raw

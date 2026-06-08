@@ -16,19 +16,19 @@ from firedantic_extras.update_collection import (
 )
 
 __all__ = [
-    # Pagination
-    "CursorPage",
-    "cursor_paginate",
-    # Query helpers
-    "build_prefix_filters",
-    "count_model",
     # CollectionSync
     "CollectionSync",
+    # Pagination
+    "CursorPage",
     "DocumentDiff",
     "DuplicateKeyError",
     "FieldDiff",
     "SyncError",
     "SyncResult",
     "UpdateCollection",
+    # Query helpers
+    "build_prefix_filters",
     "build_sync_plan",
+    "count_model",
+    "cursor_paginate",
 ]

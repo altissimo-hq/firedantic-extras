@@ -13,10 +13,12 @@ import types as _types
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from decimal import Decimal
-from typing import Any, Literal, Union, get_args, get_origin
+from typing import TYPE_CHECKING, Any, Literal, Union, get_args, get_origin
 
 from pydantic import BaseModel
-from pydantic.fields import FieldInfo
+
+if TYPE_CHECKING:
+    from pydantic.fields import FieldInfo
 
 try:
     from google.cloud.bigquery import SchemaField
@@ -210,12 +212,11 @@ def _model_to_fields(
     """Walk a model's fields and return a flat list of SchemaFields."""
     result: list[SchemaField] = []
 
-    if not is_nested:
+    if not is_nested and "id" not in exclude_fields:
         # Top-level: always emit id first as STRING NULLABLE.
         # Firedantic's BareModel declares id: str | None = None, so NULLABLE
         # matches the model definition, and in practice saved docs always have it.
-        if "id" not in exclude_fields:
-            result.append(SchemaField("id", "STRING", mode="NULLABLE"))
+        result.append(SchemaField("id", "STRING", mode="NULLABLE"))
 
     for field_name, field_info in model_class.model_fields.items():
         if field_name == "id":

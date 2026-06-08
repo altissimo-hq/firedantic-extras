@@ -95,7 +95,7 @@ def configure_firedantic(firestore_client: Client) -> None:
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def clean_collection(firestore_client: Client):
     """Factory fixture — returns a callable that deletes all docs in a collection.
 

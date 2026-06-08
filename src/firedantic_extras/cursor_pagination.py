@@ -23,13 +23,15 @@ Typical usage::
 from __future__ import annotations
 
 import logging
-from typing import Any, Generic, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 
 from firedantic import BareModel
-from google.cloud.firestore_v1.base_query import BaseQuery
 from pydantic import BaseModel
 
 from firedantic_extras.query import FilterDict, _apply_filter_dict
+
+if TYPE_CHECKING:
+    from google.cloud.firestore_v1.base_query import BaseQuery
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +87,7 @@ def _normalise_order_by(order_by: OrderByInput | None) -> list[tuple[str, str]]:
         else:
             field, direction = item
             if direction not in (ASCENDING, DESCENDING):
-                raise ValueError(f"Invalid sort direction {direction!r}. " f"Use {ASCENDING!r} or {DESCENDING!r}.")
+                raise ValueError(f"Invalid sort direction {direction!r}. Use {ASCENDING!r} or {DESCENDING!r}.")
             result.append((field, direction))
     return result
 
@@ -99,7 +101,7 @@ def _with_tiebreaker(
     Firestore silently skips duplicates at page boundaries without a unique
     final sort key.  ``__name__`` (the document ID) is always unique.
     """
-    return pairs + [("__name__", direction)]
+    return [*pairs, ("__name__", direction)]
 
 
 def _reverse_pairs(pairs: list[tuple[str, str]]) -> list[tuple[str, str]]:

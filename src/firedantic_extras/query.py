@@ -9,10 +9,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from google.cloud.firestore_v1 import FieldFilter
-from google.cloud.firestore_v1.base_query import BaseQuery
 
 if TYPE_CHECKING:
     from firedantic import BareModel
+    from google.cloud.firestore_v1.base_query import BaseQuery
 
 # Firedantic filter_ dict: {"field": value} or {"field": {"op": value, ...}}
 FilterDict = dict[str, Any]
