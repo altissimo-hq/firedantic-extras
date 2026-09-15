@@ -164,6 +164,11 @@ class PaginatedContext:
         """URL query params to switch the page size to *new_limit*."""
         return self.params.build_query_params(limit=new_limit, cursor=None)
 
+    @property
+    def used_fallback(self) -> bool:
+        """Shortcut for ``page.used_fallback`` — flash a message when ``True``."""
+        return self.page.used_fallback
+
 
 def paginate_model(
     model_class: type[BareModel],
@@ -173,6 +178,7 @@ def paginate_model(
     order_by: str | list[str | tuple[str, str]] | None = None,
     include_total: bool = True,
     exclude_null_sort_field: bool = False,
+    fallback_order_by: str | list[str | tuple[str, str]] | None = None,
 ) -> PaginatedContext:
     """Run :func:`cursor_paginate` and return a :class:`PaginatedContext`.
 
@@ -190,6 +196,14 @@ def paginate_model(
         exclude_null_sort_field: Forwarded to :func:`cursor_paginate` — excludes
                         documents where the primary sort field is ``null`` or
                         missing.
+        fallback_order_by: Forwarded to :func:`cursor_paginate` — on
+                        ``FailedPrecondition`` (missing composite index),
+                        retries with this sort spec instead.  Check
+                        :attr:`PaginatedContext.used_fallback` to flash a
+                        message when this happened. Note this bypasses
+                        *params*' sortable-column state (like an explicit
+                        ``order_by``), so ``ctx.sort_params()``/``sort_indicator()``
+                        will reflect the original request, not the fallback.
     """
     resolved_order_by = order_by if order_by is not None else [(params.order_by, params.order_dir)]
     page = cursor_paginate(
@@ -201,5 +215,6 @@ def paginate_model(
         order_by=resolved_order_by,
         include_total=include_total,
         exclude_null_sort_field=exclude_null_sort_field,
+        fallback_order_by=fallback_order_by,
     )
     return PaginatedContext(page=page, params=params, total=page.total)

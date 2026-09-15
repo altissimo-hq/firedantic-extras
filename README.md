@@ -157,6 +157,31 @@ documents for — no need to guess a type-specific sentinel value. Requires
 `order_by` to be set, and raises `ValueError` if `filter_` already has an
 entry for that field.
 
+### Falling Back on a Missing Composite Index
+
+If you use Firestore's "constrained path" index strategy — hand-defining only
+the composite indexes you actually need instead of every filter+sort
+permutation — a filter + `order_by` combination without a matching index
+raises `FailedPrecondition`. `fallback_order_by` retries once with a safe
+sort instead of making every caller write the same try/except:
+
+```python
+page = cursor_paginate(
+    Product,
+    limit=100,
+    filter_=filter_,
+    order_by=[("barcode", "ASCENDING")],
+    fallback_order_by=[("updated_at", "DESCENDING")],
+)
+if page.used_fallback:
+    flash("Sorting by barcode isn't available with this filter — showing most recently updated instead.")
+```
+
+The cursor and direction are reset (`cursor=None`, `direction="next"`) on
+fallback, since a cursor encoded for one sort order is meaningless under
+another. With no `fallback_order_by`, `FailedPrecondition` propagates as
+usual — this is purely opt-in.
+
 ### API Reference
 
 ```python
@@ -170,6 +195,7 @@ def cursor_paginate(
     filter_: FilterDict | None = None,
     include_total: bool = False,
     exclude_null_sort_field: bool = False,
+    fallback_order_by: str | list[str | tuple[str, str]] | None = None,
 ) -> CursorPage[BareModel]:
     ...
 ```
@@ -184,6 +210,7 @@ def cursor_paginate(
 | `filter_`                   | `None`   | Equality / comparison filters in Firedantic's `find()` format                                   |
 | `include_total`             | `False`  | If `True`, runs an extra server-side `COUNT` aggregation and populates `CursorPage.total`       |
 | `exclude_null_sort_field`   | `False`  | If `True`, excludes documents where the primary sort field is `null` or missing                 |
+| `fallback_order_by`         | `None`   | Sort spec to retry with on `FailedPrecondition` (missing composite index)                       |
 
 ```python
 @dataclass
@@ -194,6 +221,7 @@ class CursorPage(Generic[ModelT]):
     next_cursor: str | None   # pass as cursor + direction="next" to advance
     prev_cursor: str | None   # pass as cursor + direction="prev" to go back
     total: int | None         # total doc count, only set when include_total=True
+    used_fallback: bool       # True if this page was fetched with fallback_order_by
 ```
 
 ---
@@ -403,6 +431,8 @@ class PaginatedContext:
     def items(self) -> list[Any]: ...  # shortcut for page.items
     @property
     def showing_count(self) -> int: ...  # len(page.items)
+    @property
+    def used_fallback(self) -> bool: ...  # shortcut for page.used_fallback
     def next_params(self) -> dict[str, str]: ...
     def prev_params(self) -> dict[str, str]: ...
     def sort_params(self, field_name: str) -> dict[str, str]: ...
@@ -418,6 +448,7 @@ def paginate_model(
     order_by: OrderByInput | None = None,
     include_total: bool = True,
     exclude_null_sort_field: bool = False,
+    fallback_order_by: OrderByInput | None = None,
 ) -> PaginatedContext: ...
 ```
 

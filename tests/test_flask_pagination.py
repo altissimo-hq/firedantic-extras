@@ -190,6 +190,7 @@ class TestPaginateModel:
             order_by=[("name", ASCENDING)],
             include_total=True,
             exclude_null_sort_field=False,
+            fallback_order_by=None,
         )
         assert isinstance(ctx, PaginatedContext)
         assert ctx.total == 3
@@ -220,3 +221,19 @@ class TestPaginateModel:
         paginate_model(MagicMock(), FlaskPaginationParams(), exclude_null_sort_field=True)
 
         assert mock_cursor_paginate.call_args.kwargs["exclude_null_sort_field"] is True
+
+    def test_fallback_order_by_is_forwarded(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        mock_cursor_paginate = MagicMock(return_value=make_page())
+        monkeypatch.setattr(pagination_module, "cursor_paginate", mock_cursor_paginate)
+
+        paginate_model(MagicMock(), FlaskPaginationParams(), fallback_order_by="updated_at")
+
+        assert mock_cursor_paginate.call_args.kwargs["fallback_order_by"] == "updated_at"
+
+    def test_used_fallback_reflects_page(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        mock_cursor_paginate = MagicMock(return_value=make_page(used_fallback=True))
+        monkeypatch.setattr(pagination_module, "cursor_paginate", mock_cursor_paginate)
+
+        ctx = paginate_model(MagicMock(), FlaskPaginationParams(), fallback_order_by="updated_at")
+
+        assert ctx.used_fallback is True
