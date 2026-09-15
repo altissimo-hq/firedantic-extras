@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "firedantic-extras"
-version = "0.1.3"
+version = "0.1.4"
 description = "Add-on utilities for Firedantic: collection sync, FastAPI pagination, BigQuery schema generation"
 authors = ["Lukas Karlsson <karlsson@altissimo.io>"]
 license = "BSD-3-Clause"

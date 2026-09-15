@@ -373,6 +373,10 @@ class PaginatedContext:
     params: FlaskPaginationParams
     total: int | None = None
 
+    @property
+    def items(self) -> list[Any]: ...  # shortcut for page.items
+    @property
+    def showing_count(self) -> int: ...  # len(page.items)
     def next_params(self) -> dict[str, str]: ...
     def prev_params(self) -> dict[str, str]: ...
     def sort_params(self, field_name: str) -> dict[str, str]: ...
@@ -389,6 +393,51 @@ def paginate_model(
     include_total: bool = True,
 ) -> PaginatedContext: ...
 ```
+
+### Jinja Macros for Sortable, Paginated Tables
+
+A bundled `firedantic_extras/macros.html` template ships four Bootstrap-5
+macros that read directly from a `PaginatedContext` — sortable column
+headers, Previous/Next controls, a result-count line, and a page-size
+selector. Register the template loader once during app setup:
+
+```python
+from firedantic_extras.flask.templates import register_macros
+
+app = Flask(__name__)
+register_macros(app)
+```
+
+Then in any template:
+
+```html
+{% import "firedantic_extras/macros.html" as fe_macros %}
+
+{{ fe_macros.result_info(ctx) }}
+
+<table class="table table-hover">
+  <thead>
+    <tr>
+      {{ fe_macros.sortable_header(ctx, "name", "Name", "products.list_products") }}
+      {{ fe_macros.sortable_header(ctx, "category", "Category", "products.list_products") }}
+    </tr>
+  </thead>
+  <tbody>
+    {% for item in ctx.items %}
+    <tr>
+      <td>{{ item.name }}</td>
+      <td>{{ item.category }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+{{ fe_macros.pagination_controls(ctx, "products.list_products") }}
+{{ fe_macros.page_size_selector(ctx, "products.list_products") }}
+```
+
+These macros are intentionally minimal — copy and adapt them for custom
+styling or a different CSS framework.
 
 ## Installation
 

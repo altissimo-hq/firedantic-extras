@@ -1,0 +1,67 @@
+{#
+  Bootstrap 5 macros for a firedantic_extras.flask.pagination.PaginatedContext.
+
+  Import with:
+    {% import "firedantic_extras/macros.html" as fe_macros %}
+
+  These are intentionally minimal — copy and adapt for custom styling or a
+  different CSS framework.
+#}
+
+{% macro sortable_header(ctx, field, label, endpoint) %}
+<th scope="col">
+  <a href="{{ url_for(endpoint, **ctx.sort_params(field)) }}" class="text-decoration-none text-dark">
+    {{ label }} {{ ctx.sort_indicator(field) }}
+  </a>
+</th>
+{% endmacro %}
+
+{% macro pagination_controls(ctx, endpoint) %}
+{% if ctx.page.has_prev or ctx.page.has_next %}
+<nav class="d-flex justify-content-between align-items-center mt-3">
+  <div>
+    {% if ctx.page.has_prev %}
+      <a href="{{ url_for(endpoint, **ctx.prev_params()) }}" class="btn btn-sm btn-outline-primary">
+        ← Previous
+      </a>
+    {% else %}
+      <button class="btn btn-sm btn-outline-secondary" disabled>← Previous</button>
+    {% endif %}
+  </div>
+  <div class="text-muted small">
+    {% if ctx.total is not none %}
+      {{ ctx.total }} total item{{ "s" if ctx.total != 1 }}
+    {% endif %}
+  </div>
+  <div>
+    {% if ctx.page.has_next %}
+      <a href="{{ url_for(endpoint, **ctx.next_params()) }}" class="btn btn-sm btn-outline-primary">
+        Next →
+      </a>
+    {% else %}
+      <button class="btn btn-sm btn-outline-secondary" disabled>Next →</button>
+    {% endif %}
+  </div>
+</nav>
+{% endif %}
+{% endmacro %}
+
+{% macro result_info(ctx) %}
+<div class="text-muted">
+  {% if ctx.total is not none %}
+    {{ ctx.total }} item{{ "s" if ctx.total != 1 }} found
+  {% endif %}
+  {% if ctx.showing_count > 0 %}
+    · showing {{ ctx.showing_count }} on this page
+  {% endif %}
+</div>
+{% endmacro %}
+
+{% macro page_size_selector(ctx, endpoint, sizes=[25, 50, 100, 200]) %}
+<select name="limit" class="form-select form-select-sm" onchange="location.href=this.value">
+  {% for size in sizes %}
+    <option value="{{ url_for(endpoint, **ctx.limit_params(size)) }}" {{ "selected" if ctx.params.limit == size }}>{{ size }}</option>
+  {% endfor %}
+  <option value="{{ url_for(endpoint, **ctx.limit_params(0)) }}" {{ "selected" if ctx.params.limit not in sizes }}>All</option>
+</select>
+{% endmacro %}

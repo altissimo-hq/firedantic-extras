@@ -122,6 +122,16 @@ class PaginatedContext:
     params: FlaskPaginationParams
     total: int | None = None
 
+    @property
+    def items(self) -> list[Any]:
+        """Shortcut for ``page.items``."""
+        return self.page.items
+
+    @property
+    def showing_count(self) -> int:
+        """Number of items on the current page."""
+        return len(self.page.items)
+
     def next_params(self) -> dict[str, str]:
         """URL query params for the next page."""
         return self.params.build_query_params(cursor=self.page.next_cursor, direction="next")
