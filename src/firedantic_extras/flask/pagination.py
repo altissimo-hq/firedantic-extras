@@ -84,16 +84,22 @@ class FlaskPaginationParams:
     ) -> FlaskPaginationParams:
         """Extract pagination params from the current Flask request.args."""
         args = request.args
-        limit = int(args.get("limit", DEFAULT_LIMIT))
-        if limit < 1:
+        try:
+            limit = int(args.get("limit", DEFAULT_LIMIT))
+        except ValueError:
+            limit = DEFAULT_LIMIT
+        if limit < 1 or limit > MAX_LIMIT:
             limit = MAX_LIMIT
         direction: Literal["next", "prev"] = "prev" if args.get("direction") == "prev" else "next"
+        order_dir = args.get("order_dir", default_order_dir)
+        if order_dir not in (ASCENDING, DESCENDING):
+            order_dir = default_order_dir
         return cls(
             cursor=args.get("cursor") or None,
             direction=direction,
             limit=limit,
             order_by=args.get("order_by", default_order_by),
-            order_dir=args.get("order_dir", default_order_dir),
+            order_dir=order_dir,
         )
 
     def build_query_params(self, **overrides: Any) -> dict[str, str]:
@@ -166,6 +172,7 @@ def paginate_model(
     filter_: FilterDict | None = None,
     order_by: str | list[str | tuple[str, str]] | None = None,
     include_total: bool = True,
+    exclude_null_sort_field: bool = False,
 ) -> PaginatedContext:
     """Run :func:`cursor_paginate` and return a :class:`PaginatedContext`.
 
@@ -180,6 +187,9 @@ def paginate_model(
                         stay in sync with the query actually run.
         include_total:  If ``True`` (default), populates ``ctx.total`` with a
                         COUNT aggregation query.
+        exclude_null_sort_field: Forwarded to :func:`cursor_paginate` — excludes
+                        documents where the primary sort field is ``null`` or
+                        missing.
     """
     resolved_order_by = order_by if order_by is not None else [(params.order_by, params.order_dir)]
     page = cursor_paginate(
@@ -190,5 +200,6 @@ def paginate_model(
         filter_=filter_,
         order_by=resolved_order_by,
         include_total=include_total,
+        exclude_null_sort_field=exclude_null_sort_field,
     )
     return PaginatedContext(page=page, params=params, total=page.total)

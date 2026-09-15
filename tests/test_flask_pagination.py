@@ -62,6 +62,26 @@ class TestFromRequest:
             params = FlaskPaginationParams.from_request()
         assert params.limit == MAX_LIMIT
 
+    def test_limit_above_max_is_clamped(self) -> None:
+        with app.test_request_context("/things?limit=5000000"):
+            params = FlaskPaginationParams.from_request()
+        assert params.limit == MAX_LIMIT
+
+    def test_non_numeric_limit_falls_back_to_default(self) -> None:
+        with app.test_request_context("/things?limit=abc"):
+            params = FlaskPaginationParams.from_request()
+        assert params.limit == DEFAULT_LIMIT
+
+    def test_invalid_order_dir_falls_back_to_default(self) -> None:
+        with app.test_request_context("/things?order_dir=bogus"):
+            params = FlaskPaginationParams.from_request()
+        assert params.order_dir == DESCENDING
+
+    def test_invalid_order_dir_falls_back_to_custom_default(self) -> None:
+        with app.test_request_context("/things?order_dir=bogus"):
+            params = FlaskPaginationParams.from_request(default_order_dir=ASCENDING)
+        assert params.order_dir == ASCENDING
+
     def test_custom_defaults_apply_when_unset(self) -> None:
         with app.test_request_context("/things"):
             params = FlaskPaginationParams.from_request(default_order_by="name", default_order_dir=ASCENDING)
@@ -169,6 +189,7 @@ class TestPaginateModel:
             filter_=None,
             order_by=[("name", ASCENDING)],
             include_total=True,
+            exclude_null_sort_field=False,
         )
         assert isinstance(ctx, PaginatedContext)
         assert ctx.total == 3
@@ -191,3 +212,11 @@ class TestPaginateModel:
 
         assert mock_cursor_paginate.call_args.kwargs["filter_"] == filter_
         assert mock_cursor_paginate.call_args.kwargs["include_total"] is False
+
+    def test_exclude_null_sort_field_is_forwarded(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        mock_cursor_paginate = MagicMock(return_value=make_page())
+        monkeypatch.setattr(pagination_module, "cursor_paginate", mock_cursor_paginate)
+
+        paginate_model(MagicMock(), FlaskPaginationParams(), exclude_null_sort_field=True)
+
+        assert mock_cursor_paginate.call_args.kwargs["exclude_null_sort_field"] is True

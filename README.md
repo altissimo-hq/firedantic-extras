@@ -417,6 +417,7 @@ def paginate_model(
     filter_: FilterDict | None = None,
     order_by: OrderByInput | None = None,
     include_total: bool = True,
+    exclude_null_sort_field: bool = False,
 ) -> PaginatedContext: ...
 ```
 
