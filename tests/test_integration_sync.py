@@ -15,8 +15,10 @@ Or start the emulator first::
 
 from __future__ import annotations
 
+import contextlib
+
 import pytest
-from firedantic import Model
+from firedantic import Model, ModelNotFoundError
 
 from firedantic_extras.update_collection import CollectionSync
 
@@ -319,12 +321,20 @@ class TestCollectionSyncEndToEnd:
         uid = f"backup-{pytest.importorskip('uuid').uuid4()}"
         desired = [BackupUser(id=uid, name="Backup Alice", email="backup@e.com")]
 
-        # This should use the 'backup' client/database
-        result = CollectionSync.sync(BackupUser, desired, output_writer=None)
+        try:
+            # This should use the 'backup' client/database
+            result = CollectionSync.sync(BackupUser, desired, output_writer=None)
 
-        assert result.adds == 1
-        assert result.total_changes == 1
+            assert result.adds == 1
+            assert result.total_changes == 1
 
-        # Verify it can be found via the BackupUser model
-        found = BackupUser.get_by_id(uid)
-        assert found.name == "Backup Alice"
+            # Verify it can be found via the BackupUser model
+            found = BackupUser.get_by_id(uid)
+            assert found.name == "Backup Alice"
+        finally:
+            # The emulator collapses "backup" into the same underlying
+            # collection as the default database (see note above), so a
+            # leftover doc here pollutes every other test in this class
+            # that asserts an exact User.find() count.
+            with contextlib.suppress(ModelNotFoundError):
+                BackupUser.get_by_id(uid).delete()
