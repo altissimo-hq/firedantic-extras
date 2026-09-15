@@ -17,6 +17,7 @@ problem that arises when using Firedantic in production:
 | **`cursor_pagination`**  | Framework-agnostic cursor-based pagination for Firedantic models      |
 | **`query`**              | `count_model()` aggregation and `build_prefix_filters()` range search |
 | **`fastapi.pagination`** | FastAPI adapter (`PaginationParams`) for `cursor_paginate`            |
+| **`flask.pagination`**   | Flask adapter (`FlaskPaginationParams`, `paginate_model`) for sortable, paginated list pages |
 | **`bigquery.schema`**    | Generate BigQuery table schemas from Firedantic model classes         |
 
 ---
@@ -299,6 +300,96 @@ class PaginationParams:
     ) -> None: ...
 ```
 
+## `flask.pagination` — Flask Adapter
+
+`FlaskPaginationParams` extracts `cursor`, `direction`, `limit`, `order_by`, and
+`order_dir` from `request.args`. `paginate_model()` runs `cursor_paginate` and
+wraps the result in a `PaginatedContext` with everything a Jinja template
+needs for sortable columns and Previous/Next links.
+
+### Quick Start
+
+```python
+from flask import Blueprint, render_template
+from firedantic_extras.flask.pagination import FlaskPaginationParams, paginate_model
+
+blueprint = Blueprint("products", __name__)
+
+class Product(Model):
+    __collection__ = "products"
+    name: str
+    price: float
+    category: str
+
+@blueprint.route("/products")
+def list_products():
+    params = FlaskPaginationParams.from_request(default_order_by="name")
+    ctx = paginate_model(Product, params)
+    return render_template("products.html", ctx=ctx)
+```
+
+**In the template:**
+
+```html
+<a href="{{ url_for('products.list_products', **ctx.sort_params('name')) }}">
+  Name {{ ctx.sort_indicator('name') }}
+</a>
+
+{% if ctx.page.has_prev %}
+  <a href="{{ url_for('products.list_products', **ctx.prev_params()) }}">Previous</a>
+{% endif %}
+{% if ctx.page.has_next %}
+  <a href="{{ url_for('products.list_products', **ctx.next_params()) }}">Next</a>
+{% endif %}
+```
+
+**Request examples:**
+
+```http
+GET /products?limit=20
+GET /products?order_by=name&order_dir=ASCENDING
+GET /products?cursor=<next_cursor>&direction=next
+```
+
+### API
+
+```python
+@dataclass
+class FlaskPaginationParams:
+    cursor: str | None = None
+    direction: Literal["next", "prev"] = "next"
+    limit: int = 50
+    order_by: str = "updated_at"
+    order_dir: str = "DESCENDING"
+
+    @classmethod
+    def from_request(cls, default_order_by="updated_at", default_order_dir="DESCENDING") -> FlaskPaginationParams: ...
+    def build_query_params(self, **overrides) -> dict[str, str]: ...
+
+
+@dataclass
+class PaginatedContext:
+    page: CursorPage
+    params: FlaskPaginationParams
+    total: int | None = None
+
+    def next_params(self) -> dict[str, str]: ...
+    def prev_params(self) -> dict[str, str]: ...
+    def sort_params(self, field_name: str) -> dict[str, str]: ...
+    def sort_indicator(self, field_name: str) -> str: ...
+    def limit_params(self, new_limit: int) -> dict[str, str]: ...
+
+
+def paginate_model(
+    model_class: type[BareModel],
+    params: FlaskPaginationParams,
+    *,
+    filter_: FilterDict | None = None,
+    order_by: OrderByInput | None = None,
+    include_total: bool = True,
+) -> PaginatedContext: ...
+```
+
 ## Installation
 
 ```bash
@@ -307,6 +398,9 @@ pip install firedantic-extras
 
 # With FastAPI pagination support
 pip install firedantic-extras[fastapi]
+
+# With Flask pagination support
+pip install firedantic-extras[flask]
 
 # With BigQuery schema generation
 pip install firedantic-extras[bigquery]
