@@ -123,6 +123,14 @@ def _scalar_bq_type(python_type: Any) -> str | None:
         return "STRING"
     if get_origin(python_type) is Literal:
         return "STRING"
+    if inspect.isclass(python_type):
+        # Subclasses of a scalar type (e.g. pydantic's EmailStr < str) aren't
+        # exact dict-key matches above but should map to the same BQ type.
+        # bool is excluded from the scan since it's a subclass of int but
+        # already has its own exact-match entry.
+        for base_type, bq_type in _SCALAR_MAP.items():
+            if base_type is not bool and issubclass(python_type, base_type):
+                return bq_type
     return None
 
 

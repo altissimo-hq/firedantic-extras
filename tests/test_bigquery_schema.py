@@ -7,11 +7,14 @@ They exercise type introspection and the public API surface.
 from __future__ import annotations
 
 import enum
-from typing import TYPE_CHECKING, Any
+from datetime import date, datetime  # noqa: TC003 — needed at runtime: `from __future__ import annotations`
+from decimal import Decimal  # noqa: TC003 — means pydantic resolves these names against module globals
+from typing import Any
 
 import pytest
 from google.cloud.bigquery import SchemaField
-from pydantic import BaseModel
+from pydantic import BaseModel, GetCoreSchemaHandler
+from pydantic_core import core_schema
 
 from firedantic_extras.bigquery.schema import (
     compare_schemas,
@@ -19,10 +22,6 @@ from firedantic_extras.bigquery.schema import (
     models_to_bq_schemas,
     schema_to_dict,
 )
-
-if TYPE_CHECKING:
-    from datetime import date, datetime
-    from decimal import Decimal
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -60,6 +59,27 @@ class SimpleModel(BaseModel):
     created_at: datetime
     birthday: date
     weight: Decimal
+
+
+class CustomStr(str):
+    """A plain str subclass — same shape as pydantic's EmailStr (issue #16)."""
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> core_schema.CoreSchema:
+        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
+
+
+class CustomInt(int):
+    """A plain int subclass."""
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> core_schema.CoreSchema:
+        return core_schema.no_info_after_validator_function(cls, core_schema.int_schema())
+
+
+class StrSubclassModel(BaseModel):
+    custom_str: CustomStr
+    custom_int: CustomInt
 
 
 class OptionalAndDefaultModel(BaseModel):
@@ -178,6 +198,26 @@ class TestScalarTypes:
         schema = model_to_bq_schema(SimpleModel)
         f = field_by_name(schema, "weight")
         assert f.field_type == "NUMERIC"
+
+
+class TestScalarSubclasses:
+    """str/int/... subclasses (e.g. pydantic's EmailStr) should map to their base scalar type."""
+
+    def test_custom_str_subclass_maps_to_string(self) -> None:
+        schema = model_to_bq_schema(StrSubclassModel)
+        f = field_by_name(schema, "custom_str")
+        assert f.field_type == "STRING"
+
+    def test_custom_int_subclass_maps_to_integer(self) -> None:
+        schema = model_to_bq_schema(StrSubclassModel)
+        f = field_by_name(schema, "custom_int")
+        assert f.field_type == "INTEGER"
+
+    def test_bool_still_maps_to_boolean(self) -> None:
+        """bool is technically a subclass of int; must not be shadowed by the int mapping."""
+        schema = model_to_bq_schema(SimpleModel)
+        f = field_by_name(schema, "active")
+        assert f.field_type == "BOOLEAN"
 
 
 # ---------------------------------------------------------------------------
