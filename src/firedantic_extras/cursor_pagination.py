@@ -184,6 +184,7 @@ def cursor_paginate(
     filter_: FilterDict | None = None,
     order_by: OrderByInput | None = None,
     include_total: bool = False,
+    exclude_null_sort_field: bool = False,
 ) -> CursorPage[T]:
     """Fetch one page of results for a Firedantic model using cursor pagination.
 
@@ -217,6 +218,15 @@ def cursor_paginate(
                         must be ``"ASCENDING"`` or ``"DESCENDING"``.
         include_total:  If ``True``, runs a secondary COUNT aggregation query
                         and populates :attr:`CursorPage.total`.
+        exclude_null_sort_field: If ``True``, adds a ``!=`` filter that excludes
+                        documents where the primary sort field (the first
+                        entry in ``order_by``) is ``null`` or missing.  Firestore
+                        sorts ``null`` values before all others in ascending
+                        order (after, in descending), so paginating over an
+                        optional field otherwise surfaces a run of useless
+                        null-valued documents before any real data appears.
+                        Requires ``order_by`` to be set, and conflicts with a
+                        ``filter_`` entry already present for that field.
 
     Returns:
         A :class:`CursorPage` instance.
@@ -243,11 +253,29 @@ def cursor_paginate(
             filter_=build_prefix_filters("barcode", "DA-0001"),
             order_by="barcode",
         )
+
+        # Sorting by an optional field — skip null/missing values
+        page = cursor_paginate(
+            Kit,
+            limit=100,
+            order_by="order_id",
+            exclude_null_sort_field=True,
+        )
     """
     if limit < 1:
         raise ValueError(f"limit must be >= 1, got {limit}")
 
     order_by_pairs = _normalise_order_by(order_by)
+
+    if exclude_null_sort_field:
+        if not order_by_pairs:
+            raise ValueError("exclude_null_sort_field=True requires order_by to be set.")
+        sort_field = order_by_pairs[0][0]
+        if filter_ and sort_field in filter_:
+            raise ValueError(
+                f"exclude_null_sort_field=True conflicts with an existing filter_ entry for {sort_field!r}."
+            )
+        filter_ = {**(filter_ or {}), sort_field: {"!=": None}}
 
     # Build canonical sort pairs (user fields + __name__ tiebreaker)
     fwd_pairs = _with_tiebreaker(order_by_pairs, ASCENDING)

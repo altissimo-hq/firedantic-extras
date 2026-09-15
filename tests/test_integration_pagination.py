@@ -278,6 +278,87 @@ class TestCursorPaginateFilters:
 
 
 # ---------------------------------------------------------------------------
+# cursor_paginate — exclude_null_sort_field (issue #6)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+class TestExcludeNullSortField:
+    def test_null_valued_docs_lead_a_plain_sort(self, configure_firedantic: None) -> None:
+        """Baseline: without the option, null-category docs sort first (ASC)."""
+        _make_widgets(["with-a", "with-b"], category="X")
+        _make_widgets(["null-a", "null-b"], category=None)
+        page = cursor_paginate(Widget, limit=10, order_by="category")
+        # Ties (both nulls, both "X") settle by __name__, so only the
+        # grouping is deterministic, not the order within each group.
+        assert set(_all_labels(page)[:2]) == {"null-a", "null-b"}
+        assert set(_all_labels(page)[2:]) == {"with-a", "with-b"}
+
+    def test_excludes_null_category_ascending(self, configure_firedantic: None) -> None:
+        Widget(label="with-a", score=1, category="A").save()
+        Widget(label="with-b", score=2, category="B").save()
+        _make_widgets(["null-a", "null-b"], category=None)
+        page = cursor_paginate(Widget, limit=10, order_by="category", exclude_null_sort_field=True)
+        assert _all_labels(page) == ["with-a", "with-b"]
+
+    def test_excludes_null_category_descending(self, configure_firedantic: None) -> None:
+        Widget(label="with-a", score=1, category="A").save()
+        Widget(label="with-b", score=2, category="B").save()
+        _make_widgets(["null-a", "null-b"], category=None)
+        page = cursor_paginate(Widget, limit=10, order_by=[("category", "DESCENDING")], exclude_null_sort_field=True)
+        assert _all_labels(page) == ["with-b", "with-a"]
+
+    def test_pagination_over_non_null_docs_only(self, configure_firedantic: None) -> None:
+        Widget(label="with-a", score=1, category="A").save()
+        Widget(label="with-b", score=2, category="B").save()
+        Widget(label="with-c", score=3, category="C").save()
+        _make_widgets(["null-a", "null-b"], category=None)
+
+        page1 = cursor_paginate(Widget, limit=2, order_by="category", exclude_null_sort_field=True)
+        assert _all_labels(page1) == ["with-a", "with-b"]
+        assert page1.has_next is True
+
+        page2 = cursor_paginate(
+            Widget,
+            limit=2,
+            order_by="category",
+            exclude_null_sort_field=True,
+            cursor=page1.next_cursor,
+            direction="next",
+        )
+        assert _all_labels(page2) == ["with-c"]
+        assert page2.has_next is False
+
+    def test_combines_with_other_field_filter(self, configure_firedantic: None) -> None:
+        Widget(label="keep", score=1, category="X").save()
+        Widget(label="wrong-score", score=2, category="X").save()
+        Widget(label="null-category", score=1, category=None).save()
+
+        page = cursor_paginate(
+            Widget,
+            limit=10,
+            order_by="category",
+            filter_={"score": 1},
+            exclude_null_sort_field=True,
+        )
+        assert _all_labels(page) == ["keep"]
+
+    def test_requires_order_by(self, configure_firedantic: None) -> None:
+        with pytest.raises(ValueError, match="requires order_by"):
+            cursor_paginate(Widget, limit=10, exclude_null_sort_field=True)
+
+    def test_conflicts_with_existing_filter_on_sort_field(self, configure_firedantic: None) -> None:
+        with pytest.raises(ValueError, match="category"):
+            cursor_paginate(
+                Widget,
+                limit=10,
+                order_by="category",
+                filter_={"category": "X"},
+                exclude_null_sort_field=True,
+            )
+
+
+# ---------------------------------------------------------------------------
 # cursor_paginate — include_total
 # ---------------------------------------------------------------------------
 

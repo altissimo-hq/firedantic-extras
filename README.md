@@ -133,6 +133,30 @@ page = cursor_paginate(Product, limit=20, order_by="name", include_total=True)
 print(page.total)  # e.g. 4231 — one extra server-side COUNT aggregation
 ```
 
+### Excluding Null Sort Fields
+
+Firestore sorts documents where the sort field is `null` **before** all
+non-null values in ascending order (and **after**, in descending order). When
+a collection has a mix of documents with and without an optional field
+populated, sorting by that field surfaces a run of useless null-valued
+documents before any real data appears.
+
+```python
+# Sorting by an optional field — skip null/missing values
+page = cursor_paginate(
+    Product,
+    limit=100,
+    order_by="discontinued_at",
+    exclude_null_sort_field=True,
+)
+```
+
+This adds a `!= None` filter on the primary sort field (the first entry in
+`order_by`), which Firestore excludes both `null`-valued _and_ missing-field
+documents for — no need to guess a type-specific sentinel value. Requires
+`order_by` to be set, and raises `ValueError` if `filter_` already has an
+entry for that field.
+
 ### API Reference
 
 ```python
@@ -145,19 +169,21 @@ def cursor_paginate(
     direction: Literal["next", "prev"] = "next",
     filter_: FilterDict | None = None,
     include_total: bool = False,
+    exclude_null_sort_field: bool = False,
 ) -> CursorPage[BareModel]:
     ...
 ```
 
-| Parameter       | Default  | Description                                                                                     |
-| --------------- | -------- | ----------------------------------------------------------------------------------------------- |
-| `model_class`   | _(req.)_ | The Firedantic model class to query                                                             |
-| `limit`         | _(req.)_ | Number of items per page (≥ 1)                                                                  |
-| `order_by`      | `None`   | Field name, or list of `(field, direction)` tuples. A `__name__` tiebreaker is always appended. |
-| `cursor`        | `None`   | Document ID from a previous page's `next_cursor` or `prev_cursor`                               |
-| `direction`     | `"next"` | `"next"` to go forward, `"prev"` to go backward                                                 |
-| `filter_`       | `None`   | Equality / comparison filters in Firedantic's `find()` format                                   |
-| `include_total` | `False`  | If `True`, runs an extra server-side `COUNT` aggregation and populates `CursorPage.total`       |
+| Parameter                  | Default  | Description                                                                                     |
+| --------------------------- | -------- | ----------------------------------------------------------------------------------------------- |
+| `model_class`               | _(req.)_ | The Firedantic model class to query                                                             |
+| `limit`                     | _(req.)_ | Number of items per page (≥ 1)                                                                  |
+| `order_by`                  | `None`   | Field name, or list of `(field, direction)` tuples. A `__name__` tiebreaker is always appended. |
+| `cursor`                    | `None`   | Document ID from a previous page's `next_cursor` or `prev_cursor`                               |
+| `direction`                 | `"next"` | `"next"` to go forward, `"prev"` to go backward                                                 |
+| `filter_`                   | `None`   | Equality / comparison filters in Firedantic's `find()` format                                   |
+| `include_total`             | `False`  | If `True`, runs an extra server-side `COUNT` aggregation and populates `CursorPage.total`       |
+| `exclude_null_sort_field`   | `False`  | If `True`, excludes documents where the primary sort field is `null` or missing                 |
 
 ```python
 @dataclass
