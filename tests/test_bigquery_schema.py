@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 from google.cloud.bigquery import SchemaField
-from pydantic import BaseModel, GetCoreSchemaHandler
+from pydantic import BaseModel, EmailStr, GetCoreSchemaHandler, SecretStr
 from pydantic_core import core_schema
 
 from firedantic_extras.bigquery.schema import (
@@ -62,7 +62,14 @@ class SimpleModel(BaseModel):
 
 
 class CustomStr(str):
-    """A plain str subclass — same shape as pydantic's EmailStr (issue #16)."""
+    """A plain str subclass.
+
+    NOT the same shape as pydantic's EmailStr, despite an earlier version of
+    this comment claiming otherwise: EmailStr's __mro__ is (EmailStr, object)
+    — it validates to a string via __get_pydantic_core_schema__ but isn't
+    itself a str subclass, unlike this fixture. See TestValidatorMarkerTypes
+    below for coverage against the real EmailStr.
+    """
 
     @classmethod
     def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> core_schema.CoreSchema:
@@ -80,6 +87,11 @@ class CustomInt(int):
 class StrSubclassModel(BaseModel):
     custom_str: CustomStr
     custom_int: CustomInt
+
+
+class ValidatorMarkerModel(BaseModel):
+    email: EmailStr
+    secret: SecretStr
 
 
 class OptionalAndDefaultModel(BaseModel):
@@ -218,6 +230,34 @@ class TestScalarSubclasses:
         schema = model_to_bq_schema(SimpleModel)
         f = field_by_name(schema, "active")
         assert f.field_type == "BOOLEAN"
+
+
+class TestValidatorMarkerTypes:
+    """Regression coverage for issue #16 against pydantic's *real* EmailStr.
+
+    The original fix for #16 only added an issubclass() scan, verified
+    against the CustomStr/CustomInt fixtures above. Those are real str/int
+    subclasses, but pydantic.EmailStr is not — its __mro__ is just
+    (EmailStr, object), so it validates to a string via
+    __get_pydantic_core_schema__ without an issubclass check ever seeing it.
+    The original bug (EmailStr fields mapping to JSON instead of STRING) was
+    still present after that fix landed; these tests exercise the real type
+    directly so that gap can't recur silently.
+    """
+
+    def test_emailstr_maps_to_string(self) -> None:
+        schema = model_to_bq_schema(ValidatorMarkerModel)
+        f = field_by_name(schema, "email")
+        assert f.field_type == "STRING"
+
+    def test_secretstr_falls_back_to_json(self) -> None:
+        """SecretStr's core schema is a nested lax-or-strict/union, not a
+        simple wrapper -- rather than mis-map it, the fallback should
+        decline (JSON) rather than guess.
+        """
+        schema = model_to_bq_schema(ValidatorMarkerModel)
+        f = field_by_name(schema, "secret")
+        assert f.field_type == "JSON"
 
 
 # ---------------------------------------------------------------------------

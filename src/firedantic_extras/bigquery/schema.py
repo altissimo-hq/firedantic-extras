@@ -15,7 +15,7 @@ from datetime import date, datetime, time
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal, Union, get_args, get_origin
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 if TYPE_CHECKING:
     from pydantic.fields import FieldInfo
@@ -78,6 +78,27 @@ _SCALAR_MAP: dict[type, str] = {
     Decimal: "NUMERIC",
 }
 
+# pydantic-core's own scalar schema-node names, keyed the same way _SCALAR_MAP
+# is keyed by Python type. Used as a fallback for types like EmailStr that
+# validate to a plain string but aren't themselves subclasses of str -- see
+# _resolve_via_core_schema below.
+_CORE_SCHEMA_SCALAR_MAP: dict[str, str] = {
+    "str": "STRING",
+    "int": "INTEGER",
+    "float": "FLOAT",
+    "bool": "BOOLEAN",
+    "datetime": "TIMESTAMP",
+    "date": "DATE",
+    "time": "TIME",
+    "bytes": "BYTES",
+    "decimal": "NUMERIC",
+}
+
+# pydantic-core schema node types that wrap a single inner schema under a
+# "schema" key, purely for validation/serialization purposes -- the type
+# BigQuery cares about is whatever they ultimately wrap.
+_CORE_SCHEMA_WRAPPER_TYPES = frozenset({"function-after", "function-before", "function-wrap", "nullable", "default"})
+
 
 # ---------------------------------------------------------------------------
 # Internal: type-inspection helpers
@@ -115,6 +136,38 @@ def _is_dict_like(python_type: Any) -> bool:
     return origin is dict
 
 
+def _bq_type_from_core_schema(node: Any, _depth: int = 0) -> str | None:
+    """Recursively unwrap a pydantic-core schema dict to find a scalar leaf type."""
+    if _depth > 10 or not isinstance(node, dict):
+        return None
+    node_type = node.get("type")
+    if node_type in _CORE_SCHEMA_SCALAR_MAP:
+        return _CORE_SCHEMA_SCALAR_MAP[node_type]
+    if node_type in _CORE_SCHEMA_WRAPPER_TYPES:
+        inner = node.get("schema")
+        if inner is not None:
+            return _bq_type_from_core_schema(inner, _depth + 1)
+    return None
+
+
+def _resolve_via_core_schema(python_type: type) -> str | None:
+    """Resolve a BQ type via pydantic-core's actual validation schema.
+
+    Handles "validator marker" types like pydantic's ``EmailStr`` or
+    ``SecretStr``: these validate to a plain string via
+    ``__get_pydantic_core_schema__`` but, unlike a real ``class Foo(str)``
+    subclass, don't appear in an ``issubclass`` scan against ``_SCALAR_MAP``
+    at all -- ``EmailStr.__mro__`` is just ``(EmailStr, object)``. Following
+    what pydantic-core actually resolves the type to (rather than guessing
+    from the Python class hierarchy) catches these correctly.
+    """
+    try:
+        core_schema = TypeAdapter(python_type).core_schema
+    except Exception:  # not every class is a valid pydantic type
+        return None
+    return _bq_type_from_core_schema(core_schema)
+
+
 def _scalar_bq_type(python_type: Any) -> str | None:
     """Return the BQ type string for a scalar type, or None if not scalar."""
     if python_type in _SCALAR_MAP:
@@ -124,13 +177,19 @@ def _scalar_bq_type(python_type: Any) -> str | None:
     if get_origin(python_type) is Literal:
         return "STRING"
     if inspect.isclass(python_type):
-        # Subclasses of a scalar type (e.g. pydantic's EmailStr < str) aren't
-        # exact dict-key matches above but should map to the same BQ type.
-        # bool is excluded from the scan since it's a subclass of int but
-        # already has its own exact-match entry.
+        # Subclasses of a scalar type (e.g. a plain `class MyId(str): ...`)
+        # aren't exact dict-key matches above but should map to the same BQ
+        # type. bool is excluded from the scan since it's a subclass of int
+        # but already has its own exact-match entry.
         for base_type, bq_type in _SCALAR_MAP.items():
             if base_type is not bool and issubclass(python_type, base_type):
                 return bq_type
+        # Not a real subclass of anything scalar, and not a nested model --
+        # fall back to what pydantic-core actually validates it to.
+        if not issubclass(python_type, BaseModel):
+            resolved = _resolve_via_core_schema(python_type)
+            if resolved is not None:
+                return resolved
     return None
 
 
