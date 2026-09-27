@@ -5,6 +5,8 @@ Structure
 TestComputeFieldDiffs   Unit tests for the _compute_field_diffs() helper.
 TestIndexDesired        Unit tests for _index_desired().
 TestBuildSyncPlan       Unit tests for build_sync_plan() — pure, no Firestore.
+TestDuplicateKeys       _resolve_duplicates() + _reconcile_desired(), and how
+                        they feed build_sync_plan for each on_duplicate_keys.
 TestSyncResult          Unit tests for SyncResult helpers.
 
 All pure-function tests require zero Firestore connectivity.  The Firestore
@@ -17,8 +19,15 @@ from __future__ import annotations
 import pytest
 from firedantic import Model
 
+from firedantic_extras.common.sync_plan import (
+    _ExistingDoc,
+    _ExistingIndex,
+    _reconcile_desired,
+    _resolve_duplicates,
+)
 from firedantic_extras.update_collection import (
     _MISSING,
+    DuplicateKeyError,
     SyncError,
     SyncResult,
     _compute_field_diffs,
@@ -427,6 +436,99 @@ class TestBuildSyncPlan:
 
 
 # ---------------------------------------------------------------------------
+# TestDuplicateKeys — on_duplicate_keys handling, pure
+# ---------------------------------------------------------------------------
+
+
+def _doc(uid: str, name: str, email: str) -> _ExistingDoc:
+    """One streamed document as _fetch_existing collects it: (doc_id, model, raw)."""
+    return uid, _user(uid, name, email), _raw(name, email)
+
+
+def _seen_with_duplicates() -> dict[str, list[_ExistingDoc]]:
+    """Two docs share a@e.com; b@e.com is unique."""
+    return {
+        "a@e.com": [_doc("u1", "Alice", "a@e.com"), _doc("u2", "Alice Too", "a@e.com")],
+        "b@e.com": [_doc("u3", "Bob", "b@e.com")],
+    }
+
+
+class TestDuplicateKeys:
+    def test_raise_is_the_default_strategy_error(self):
+        with pytest.raises(DuplicateKeyError, match="matches 2 Firestore documents"):
+            _resolve_duplicates(_seen_with_duplicates(), key_field="email", on_duplicate_keys="raise")
+
+    def test_unique_keys_pass_through_untouched(self):
+        index = _resolve_duplicates(_seen_with_duplicates(), key_field="email", on_duplicate_keys="skip")
+        assert index.models["b@e.com"].get_document_id() == "u3"
+        assert index.raw["b@e.com"] == _raw("Bob", "b@e.com")
+
+    def test_skip_drops_the_key_and_records_it(self):
+        index = _resolve_duplicates(_seen_with_duplicates(), key_field="email", on_duplicate_keys="skip")
+        assert set(index.raw) == {"b@e.com"}
+        assert index.skipped_keys == ["a@e.com"]
+        assert index.aliases == {}
+
+    def test_update_all_keys_each_duplicate_by_readable_alias(self):
+        index = _resolve_duplicates(_seen_with_duplicates(), key_field="email", on_duplicate_keys="update_all")
+        assert index.aliases == {"a@e.com": ["a@e.com (doc u1)", "a@e.com (doc u2)"]}
+        assert set(index.raw) == {"a@e.com (doc u1)", "a@e.com (doc u2)", "b@e.com"}
+        assert index.models["a@e.com (doc u2)"].get_document_id() == "u2"
+        assert index.skipped_keys == []
+
+    def test_reconcile_drops_skipped_keys(self):
+        desired = {"a@e.com": _user("x", "Alice", "a@e.com"), "b@e.com": _user("u3", "Bob", "b@e.com")}
+        reconciled = _reconcile_desired(desired, _ExistingIndex(skipped_keys=["a@e.com"]))
+        assert set(reconciled) == {"b@e.com"}
+
+    def test_reconcile_fans_aliased_key_out_to_every_duplicate(self):
+        alice = _user("x", "Alice", "a@e.com")
+        existing = _ExistingIndex(aliases={"a@e.com": ["a@e.com (doc u1)", "a@e.com (doc u2)"]})
+        reconciled = _reconcile_desired({"a@e.com": alice}, existing)
+        assert reconciled == {"a@e.com (doc u1)": alice, "a@e.com (doc u2)": alice}
+
+    def test_reconcile_leaves_plain_keys_alone(self):
+        bob = _user("u3", "Bob", "b@e.com")
+        assert _reconcile_desired({"b@e.com": bob}, _ExistingIndex()) == {"b@e.com": bob}
+
+    # Regression: before _reconcile_desired existed, the desired item for a
+    # duplicated key never matched anything in `existing` and was planned as
+    # a brand-new add — overwriting one of the duplicates for "skip" and
+    # bypassing them all for "update_all".
+
+    def test_end_to_end_update_all_updates_every_duplicate(self):
+        index = _resolve_duplicates(_seen_with_duplicates(), key_field="email", on_duplicate_keys="update_all")
+        desired = _reconcile_desired({"a@e.com": _user("u1", "Alice Renamed", "a@e.com")}, index)
+
+        plan = build_sync_plan(
+            desired=desired, existing_models=index.models, existing_raw=index.raw, doc_id_field="id", diff=True
+        )
+
+        assert plan.to_add == []
+        assert sorted(doc_id for doc_id, _ in plan.to_update) == ["u1", "u2"]
+        assert set(plan.diffs) == {"a@e.com (doc u1)", "a@e.com (doc u2)"}
+        assert plan.diffs["a@e.com (doc u2)"].doc_id == "u2"
+
+    def test_end_to_end_skip_neither_adds_updates_nor_deletes(self):
+        index = _resolve_duplicates(_seen_with_duplicates(), key_field="email", on_duplicate_keys="skip")
+        desired = _reconcile_desired({"a@e.com": _user("u1", "Alice Renamed", "a@e.com")}, index)
+
+        plan = build_sync_plan(
+            desired=desired,
+            existing_models=index.models,
+            existing_raw=index.raw,
+            doc_id_field="id",
+            delete_items=True,
+        )
+
+        assert plan.to_add == []
+        assert plan.to_update == []
+        # Bob is genuinely absent from desired, so delete_items still removes
+        # him; the skipped duplicates are not deleted.
+        assert plan.to_delete == ["u3"]
+
+
+# ---------------------------------------------------------------------------
 # TestSyncResult
 # ---------------------------------------------------------------------------
 
@@ -452,6 +554,11 @@ class TestSyncResult:
     def test_summary_excludes_error_line_when_no_errors(self):
         r = SyncResult(adds=1)
         assert "errors" not in r.summary()
+
+    def test_summary_includes_skipped_duplicates_when_present(self):
+        r = SyncResult(skipped_duplicate_keys=["a@e.com"])
+        assert "skipped_duplicates=1" in r.summary()
+        assert "skipped_duplicates" not in SyncResult().summary()
 
     def test_has_errors_false_by_default(self):
         assert SyncResult().has_errors is False
