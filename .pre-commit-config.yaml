@@ -7,6 +7,16 @@ repos:
       - id: check-yaml
       - id: check-added-large-files
       - id: mixed-line-ending
+  - repo: local
+    hooks:
+      # Regenerates src/firedantic_extras/_sync and tests/tests_sync from the
+      # async sources. Fails (files modified) when the committed copy is stale.
+      - id: unasync
+        name: unasync (generate sync code from async sources)
+        entry: poetry run python unasync.py
+        language: system
+        pass_filenames: false
+        always_run: true
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.11.13
     hooks:

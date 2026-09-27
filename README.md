@@ -20,6 +20,27 @@ problem that arises when using Firedantic in production:
 | **`flask.pagination`**   | Flask adapter (`FlaskPaginationParams`, `paginate_model`) for sortable, paginated list pages |
 | **`bigquery.schema`**    | Generate BigQuery table schemas from Firedantic model classes         |
 
+### Sync and async
+
+Every helper that talks to Firestore comes in two flavours. The plain name
+works with `firedantic.Model` (sync); the `async_` / `Async` name works with
+`firedantic.AsyncModel` and must be awaited. Options, return types and
+behaviour are identical.
+
+| Sync (`firedantic.Model`)  | Async (`firedantic.AsyncModel`)    |
+| -------------------------- | ---------------------------------- |
+| `cursor_paginate(...)`     | `await async_cursor_paginate(...)` |
+| `count_model(...)`         | `await async_count_model(...)`     |
+| `CollectionSync.sync(...)` | `await AsyncCollectionSync.sync(...)` |
+
+`build_prefix_filters`, `CursorPage`, `SyncResult` and the `bigquery.schema`
+module never touch Firestore and are shared. The Flask adapter is sync-only
+(Flask is); the FastAPI adapter's `PaginationParams` works with either — see
+[the FastAPI section](#fastapipagination--fastapi-adapter).
+
+Don't call a sync helper from inside a running event loop (an `async def`
+FastAPI route, for example): it blocks the loop. Use the async flavour there.
+
 ---
 
 ## `cursor_pagination` — Cursor-Based Pagination
@@ -321,6 +342,31 @@ def list_products(
     )
 ```
 
+`cursor_paginate` blocks, so the route above is a plain `def` — FastAPI runs
+it in a threadpool. For an `async def` route, use an `AsyncModel` and
+`async_cursor_paginate`:
+
+```python
+from firedantic import AsyncModel
+from firedantic_extras.fastapi.pagination import PaginationParams, async_cursor_paginate
+
+class Product(AsyncModel):
+    __collection__ = "products"
+    name: str
+    price: float
+    category: str
+
+@app.get("/products")
+async def list_products(pagination: PaginationParams = Depends()) -> CursorPage[Product]:
+    return await async_cursor_paginate(
+        Product,
+        limit=pagination.limit,
+        order_by="name",
+        cursor=pagination.cursor,
+        direction=pagination.direction,
+    )
+```
+
 **Request examples:**
 
 ```http
@@ -576,9 +622,18 @@ for key, doc_diff in result.diffs.items():
         print(f"  {change.field}: {change.before!r} → {change.after!r}")
 ```
 
+With `firedantic.AsyncModel` subclasses use `AsyncCollectionSync` — same
+constructor and options, `run()` and `sync()` are coroutines:
+
+```python
+from firedantic_extras import AsyncCollectionSync
+
+result = await AsyncCollectionSync.sync(User, desired, delete_items=True, diff=True)
+```
+
 ### API Reference
 
-#### `CollectionSync`
+#### `CollectionSync` / `AsyncCollectionSync`
 
 ```python
 class CollectionSync:
@@ -890,6 +945,33 @@ poetry run ruff format .
 # Pre-commit hooks (installed automatically)
 poetry run pre-commit run --all-files
 ```
+
+### Generated Sync Code (`unasync.py`)
+
+The async code is the source of truth; the sync flavour is generated from it,
+the same way Firedantic itself does it:
+
+| Hand-written (edit these)                | Generated (never edit)          |
+| ---------------------------------------- | ------------------------------- |
+| `src/firedantic_extras/_async/`          | `src/firedantic_extras/_sync/`  |
+| `tests/tests_async/`                     | `tests/tests_sync/`             |
+
+`unasync.py` rewrites each file line by line (`async def` → `def`, `await x`
+→ `x`, `AsyncFoo` → `Foo`, `async_cursor_paginate` → `cursor_paginate`, …)
+and ruff-formats the result. The pre-commit hook runs it on every commit, and
+because the generated files are committed, CI's `pre-commit run --all-files`
+fails if they are stale.
+
+```bash
+poetry run python unasync.py   # regenerate by hand
+```
+
+Keep the `_async` modules thin: anything that doesn't need a Firestore
+round-trip (validation, planning, diffing, result assembly) belongs in
+`src/firedantic_extras/common/`, which both flavours import. That keeps the
+generated code small and the substitution table short. The top-level modules
+(`cursor_pagination.py`, `query.py`, `update_collection.py`) are facades that
+re-export the public API from `common/`, `_async/` and `_sync/`.
 
 ### Integration Tests (Firestore Emulator)
 
