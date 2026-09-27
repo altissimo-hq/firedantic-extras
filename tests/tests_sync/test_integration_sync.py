@@ -1,3 +1,5 @@
+# GENERATED FILE — do not edit.
+# Source: tests/tests_async/test_integration_sync.py. Regenerate with `poetry run python unasync.py`.
 """Integration tests for CollectionSync against the Firestore emulator.
 
 These tests require a running Firestore emulator (port 8686) and are
@@ -16,13 +18,13 @@ Or start the emulator first::
 from __future__ import annotations
 
 import contextlib
+import uuid
 
 import pytest
 from firedantic import Model, ModelNotFoundError
 
-from firedantic_extras.update_collection import CollectionSync
-
-from .conftest import COLLECTION_PREFIX
+from firedantic_extras.update_collection import CollectionSync, DuplicateKeyError
+from tests.conftest import COLLECTION_PREFIX
 
 # ---------------------------------------------------------------------------
 # Test model
@@ -295,6 +297,31 @@ class TestCollectionSyncEndToEnd:
         assert result.updates == 1
         assert result.adds == 0
 
+    def test_duplicate_sync_key_raises_by_default(self, configure_firedantic, clean_collection):
+        """Two existing docs sharing a sync_key value abort the sync unless told otherwise."""
+        clean_collection(_prefixed_collection())
+
+        CollectionSync.sync(
+            User,
+            [
+                _make_user("u1", "Alice", "same@example.com"),
+                _make_user("u2", "Alice Too", "same@example.com"),
+            ],
+            output_writer=None,
+        )
+
+        with pytest.raises(DuplicateKeyError, match="matches 2 Firestore documents"):
+            CollectionSync.sync(
+                User,
+                [_make_user("u1", "Alice", "same@example.com")],
+                sync_key="email",
+                output_writer=None,
+            )
+
+        # Nothing was written: both originals are intact.
+        found = User.find()
+        assert {u.name for u in found} == {"Alice", "Alice Too"}
+
     def test_summary_output(self, configure_firedantic, clean_collection):
         clean_collection(_prefixed_collection())
 
@@ -318,7 +345,7 @@ class TestCollectionSyncEndToEnd:
         # Note: We don't use clean_collection because it uses the default client.
         # Since the emulator collapses all DBs into (default) currently, it doesn't matter,
         # but for correctness we'll just use unique IDs.
-        uid = f"backup-{pytest.importorskip('uuid').uuid4()}"
+        uid = f"backup-{uuid.uuid4()}"
         desired = [BackupUser(id=uid, name="Backup Alice", email="backup@e.com")]
 
         try:
@@ -337,4 +364,5 @@ class TestCollectionSyncEndToEnd:
             # leftover doc here pollutes every other test in this class
             # that asserts an exact User.find() count.
             with contextlib.suppress(ModelNotFoundError):
-                BackupUser.get_by_id(uid).delete()
+                leftover = BackupUser.get_by_id(uid)
+                leftover.delete()

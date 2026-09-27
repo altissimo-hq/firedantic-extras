@@ -25,6 +25,20 @@ Typical usage::
             direction=page.direction,
             order_by="barcode",
         )
+
+``cursor_paginate`` blocks, so keep the route a plain ``def`` (FastAPI runs it
+in a threadpool).  In an ``async def`` route use ``async_cursor_paginate`` with
+a ``firedantic.AsyncModel``::
+
+    @router.get("/kits", response_model=CursorPage)
+    async def list_kits(page: PaginationParams = Depends()):
+        return await async_cursor_paginate(
+            Kit,
+            limit=page.limit,
+            cursor=page.cursor,
+            direction=page.direction,
+            order_by="barcode",
+        )
 """
 
 from __future__ import annotations
@@ -39,11 +53,12 @@ except ImportError as exc:  # pragma: no cover
     ) from exc
 
 # Re-export the core types so callers can use a single import.
-from firedantic_extras.cursor_pagination import CursorPage, cursor_paginate
+from firedantic_extras.cursor_pagination import CursorPage, async_cursor_paginate, cursor_paginate
 
 __all__ = [
     "CursorPage",
     "PaginationParams",
+    "async_cursor_paginate",
     "cursor_paginate",
 ]
 

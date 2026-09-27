@@ -4,10 +4,11 @@ Provides:
 - ``require_emulator`` — auto-use fixture that skips integration tests when
   the Firestore emulator is not running.
 - ``firestore_client`` — session-scoped Firestore client pointing at the emulator.
-- ``configure_firedantic`` — session-scoped fixture that registers a firedantic
-  configuration backed by the emulator.
 - ``clean_collection`` — per-test fixture that deletes all documents in a
   collection after the test completes.
+
+``configure_firedantic`` (registers firedantic configs backed by the emulator)
+lives in ``tests_async/conftest.py`` and its generated ``tests_sync`` twin.
 """
 
 from __future__ import annotations
@@ -18,7 +19,6 @@ from unittest.mock import Mock
 
 import google.auth.credentials
 import pytest
-from firedantic.configurations import configuration
 from google.cloud.firestore_v1.client import Client
 
 # ---------------------------------------------------------------------------
@@ -66,31 +66,6 @@ def firestore_client() -> Client:
     os.environ.setdefault("FIRESTORE_EMULATOR_HOST", EMULATOR_HOST)
     return Client(
         project=EMULATOR_PROJECT,
-        credentials=Mock(spec=google.auth.credentials.Credentials),
-    )
-
-
-@pytest.fixture(scope="session")
-def configure_firedantic(firestore_client: Client) -> None:
-    """Register firedantic configurations backed by the emulator.
-
-    Uses the session-scoped ``firestore_client`` so only one client is
-    created for the entire test run.
-    """
-    # Default configuration
-    configuration.add(
-        name="(default)",
-        prefix=COLLECTION_PREFIX,
-        project=EMULATOR_PROJECT,
-        credentials=Mock(spec=google.auth.credentials.Credentials),
-    )
-
-    # Backup configuration for testing multi-db routing
-    configuration.add(
-        name="backup",
-        prefix=COLLECTION_PREFIX,
-        project=EMULATOR_PROJECT,
-        database="backup",
         credentials=Mock(spec=google.auth.credentials.Credentials),
     )
 
