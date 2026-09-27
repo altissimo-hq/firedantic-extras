@@ -27,11 +27,13 @@ from firedantic_extras.common.sync_plan import (
     OnError,
     SyncResult,
     _ExistingDoc,
+    _ExistingIndex,
     _handle_error,
     _index_desired,
     _iter_chunks,
     _load_existing_doc,
     _model_data,
+    _reconcile_desired,
     _resolve_duplicates,
     _SyncPlan,
     build_sync_plan,
@@ -49,7 +51,7 @@ async def _fetch_existing(
     model: type[AsyncBareModel],
     sync_key: str | None,
     on_duplicate_keys: OnDuplicateKeys,
-) -> tuple[dict[str, AsyncBareModel], dict[str, dict[str, Any]]]:
+) -> _ExistingIndex:
     """Fetch all existing documents from the Firestore collection.
 
     Streams the collection, hydrates each document into a model instance, and
@@ -63,8 +65,7 @@ async def _fetch_existing(
                             ``"update_all"``).
 
     Returns:
-        A 2-tuple of ``(existing_models, existing_raw)`` — both dicts are
-        keyed by ``sync_key_value``.
+        An :class:`~firedantic_extras.common.sync_plan._ExistingIndex`.
 
     Raises:
         DuplicateKeyError: When ``on_duplicate_keys="raise"`` and duplicates
@@ -288,13 +289,14 @@ class AsyncCollectionSync:
         desired = _index_desired(self._items, self._sync_key, doc_id_field)
 
         # 2. Fetch existing from Firestore.
-        existing_models, existing_raw = await _fetch_existing(self._model, self._sync_key, self._on_duplicate_keys)
+        existing = await _fetch_existing(self._model, self._sync_key, self._on_duplicate_keys)
 
-        # 3. Build plan (pure, no I/O).
+        # 3. Build plan (pure, no I/O).  Duplicate-key handling must be applied
+        #    to both sides, or the desired item looks brand new to the planner.
         plan = build_sync_plan(
-            desired=desired,
-            existing_models=existing_models,
-            existing_raw=existing_raw,
+            desired=_reconcile_desired(desired, existing),
+            existing_models=existing.models,
+            existing_raw=existing.raw,
             doc_id_field=doc_id_field,
             delete_items=self._delete_items,
             diff=self._diff,
@@ -311,7 +313,7 @@ class AsyncCollectionSync:
             )
 
         # 4. Apply plan (I/O).
-        return await _apply_plan(
+        result = await _apply_plan(
             plan,
             self._model,
             chunk_size=self._chunk_size,
@@ -319,6 +321,8 @@ class AsyncCollectionSync:
             on_error=self._on_error,
             output_writer=self._output_writer,
         )
+        result.skipped_duplicate_keys = existing.skipped_keys
+        return result
 
     @classmethod
     async def sync(

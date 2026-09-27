@@ -682,7 +682,7 @@ class CollectionSync:
 | `dry_run`           | `False`      | If `True`, logs planned changes without writing                                                                           |
 | `diff`              | `False`      | If `True`, collects field-level diffs for updates                                                                         |
 | `sync_key`          | `None`       | Field to match incoming items to existing docs. <br>`None` uses the document ID; set to e.g. `"email"` for non-ID matches |
-| `on_duplicate_keys` | `"raise"`    | What to do when `sync_key` matches >1 doc: `"raise"`, `"skip"`, or `"update_all"`                                         |
+| `on_duplicate_keys` | `"raise"`    | What to do when `sync_key` matches >1 existing doc: `"raise"` aborts; `"skip"` leaves those docs _and_ the incoming item untouched (listed in `result.skipped_duplicate_keys`); `"update_all"` writes the incoming item to every matching doc |
 | `on_error`          | `"raise"`    | Per-document error strategy: `"raise"`, `"collect"`, or `"skip"`                                                          |
 | `chunk_size`        | `500`        | Max operations per Firestore batch write (capped at 500)                                                                  |
 | `output_writer`     | `print`      | Callable for progress output; pass `None` to suppress                                                                     |
@@ -701,6 +701,7 @@ class SyncResult:
     diffs: dict[str, DocumentDiff]   # populated when diff=True
     errors: list[SyncError]          # populated when on_error != "raise"
     dry_run: bool = False
+    skipped_duplicate_keys: list[str]  # populated when on_duplicate_keys="skip"
 
     @property
     def has_errors(self) -> bool: ...
