@@ -23,31 +23,19 @@ python = "^3.10"
 firedantic = ">=0.13"
 google-cloud-firestore = ">=2.0"
 pydantic = ">=2.0"
+# Optional integrations — pulled in by the extras below (pip install
+# firedantic-extras[flask] etc.). Declared here, not as dependency groups:
+# Poetry only exports an extra to package metadata when its packages are
+# optional entries of the main dependency table.
+fastapi = { version = ">=0.100", optional = true }
+flask = { version = ">=2.0", optional = true }
+google-cloud-bigquery = { version = ">=3.0", optional = true }
 
 [tool.poetry.extras]
-fastapi = ["fastapi", "fastapi-pagination"]
+fastapi = ["fastapi"]
 flask = ["flask"]
 bigquery = ["google-cloud-bigquery"]
-all = ["fastapi", "fastapi-pagination", "flask", "google-cloud-bigquery"]
-
-[tool.poetry.group.fastapi]
-optional = true
-
-[tool.poetry.group.fastapi.dependencies]
-fastapi = ">=0.100"
-fastapi-pagination = ">=0.12"
-
-[tool.poetry.group.flask]
-optional = true
-
-[tool.poetry.group.flask.dependencies]
-flask = ">=2.0"
-
-[tool.poetry.group.bigquery]
-optional = true
-
-[tool.poetry.group.bigquery.dependencies]
-google-cloud-bigquery = ">=3.0"
+all = ["fastapi", "flask", "google-cloud-bigquery"]
 
 [tool.poetry.group.dev.dependencies]
 mypy = "^1.15.0"

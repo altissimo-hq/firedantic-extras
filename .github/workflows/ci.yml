@@ -15,7 +15,7 @@ jobs:
         with:
           python-version: "3.13"
       - run: pipx install poetry==2.0.1
-      - run: poetry sync --with dev,fastapi,flask,bigquery
+      - run: poetry sync --with dev --all-extras
       - run: poetry run pre-commit run --all-files
 
   test:
@@ -29,7 +29,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: pipx install poetry==2.0.1
-      - run: poetry sync --with dev,fastapi,flask,bigquery
+      - run: poetry sync --with dev --all-extras
       # The threshold is a smoke check (did the suite actually run?), not a
       # target. Integration tests need the emulator and don't run here, so the
       # Firestore I/O layers are largely uncovered in CI by design.
