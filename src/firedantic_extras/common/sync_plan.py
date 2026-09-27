@@ -111,6 +111,11 @@ class SyncResult:
         errors:   List of :class:`SyncError` objects.
                   Populated only when ``on_error != "raise"``.
         dry_run:  Whether this was a dry run (no writes were made).
+        skipped_duplicate_keys:
+                  ``sync_key`` values that matched more than one existing
+                  document and were therefore left untouched — the duplicates
+                  were neither updated nor deleted, and the incoming item was
+                  not added.  Populated only when ``on_duplicate_keys="skip"``.
     """
 
     adds: int = 0
@@ -120,6 +125,7 @@ class SyncResult:
     diffs: dict[str, DocumentDiff] = field(default_factory=dict)
     errors: list[SyncError] = field(default_factory=list)
     dry_run: bool = False
+    skipped_duplicate_keys: list[str] = field(default_factory=list)
 
     @property
     def has_errors(self) -> bool:
@@ -141,6 +147,8 @@ class SyncResult:
         ]
         if self.errors:
             parts.append(f"errors={len(self.errors)}")
+        if self.skipped_duplicate_keys:
+            parts.append(f"skipped_duplicates={len(self.skipped_duplicate_keys)}")
         if self.dry_run:
             parts.append("DRY RUN")
         return "SyncResult(" + ", ".join(parts) + ")"
@@ -375,33 +383,60 @@ def _load_existing_doc(
     return str(raw_key), model_instance
 
 
+@dataclass
+class _ExistingIndex:
+    """Existing Firestore documents indexed by sync-key value, duplicates resolved.
+
+    ``models`` / ``raw`` are what :func:`build_sync_plan` consumes.  A key that
+    matched several documents is handled per ``on_duplicate_keys``:
+
+    - ``"raise"``      → :class:`DuplicateKeyError`; this object is never built.
+    - ``"skip"``       → absent from ``models`` / ``raw``, listed in
+                         ``skipped_keys``.
+    - ``"update_all"`` → each document stored under its own alias key
+                         (:func:`_alias_key`), listed in ``aliases``.
+
+    :func:`_reconcile_desired` applies the matching treatment to the desired
+    side so the two line up when they reach :func:`build_sync_plan`.
+    """
+
+    models: dict[str, Any] = field(default_factory=dict)
+    raw: dict[str, dict[str, Any]] = field(default_factory=dict)
+    skipped_keys: list[str] = field(default_factory=list)
+    aliases: dict[str, list[str]] = field(default_factory=dict)
+
+
+def _alias_key(key_value: str, doc_id: str) -> str:
+    """Per-document key for one of several documents sharing a sync-key value.
+
+    Readable on purpose — it is what ``SyncResult.diffs`` and
+    ``DocumentDiff.sync_key_value`` show for ``on_duplicate_keys="update_all"``.
+    """
+    return f"{key_value} (doc {doc_id})"
+
+
 def _resolve_duplicates(
     seen: dict[str, list[_ExistingDoc]],
     *,
     key_field: str,
     on_duplicate_keys: OnDuplicateKeys,
-) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
-    """Collapse ``key_value → [docs]`` into the two dicts :func:`build_sync_plan` wants.
+) -> _ExistingIndex:
+    """Collapse ``key_value → [docs]`` into an :class:`_ExistingIndex`.
 
     Keys matched by exactly one document pass straight through.  Keys matched
     by several are handled per ``on_duplicate_keys``.
-
-    Returns:
-        A 2-tuple of ``(existing_models, existing_raw)`` — both dicts are
-        keyed by ``sync_key_value``.
 
     Raises:
         DuplicateKeyError: When ``on_duplicate_keys="raise"`` and duplicates
                            are found.
     """
-    existing_models: dict[str, Any] = {}
-    existing_raw: dict[str, dict[str, Any]] = {}
+    index = _ExistingIndex()
 
     for key_value, docs in seen.items():
         if len(docs) == 1:
             _doc_id, model_instance, raw = docs[0]
-            existing_models[key_value] = model_instance
-            existing_raw[key_value] = raw
+            index.models[key_value] = model_instance
+            index.raw[key_value] = raw
         elif on_duplicate_keys == "raise":
             doc_ids = [d[0] for d in docs]
             raise DuplicateKeyError(
@@ -416,16 +451,38 @@ def _resolve_duplicates(
                 key_value,
                 len(docs),
             )
-            # Not added to result — excluded from the plan entirely.
+            index.skipped_keys.append(key_value)
         elif on_duplicate_keys == "update_all":
-            # Add each duplicate under a disambiguated key so build_sync_plan
-            # sees them as separate entries and updates all of them.
-            for i, (_doc_id, model_instance, raw) in enumerate(docs):
-                disambig = f"{key_value}\x00dup{i}"
-                existing_models[disambig] = model_instance
-                existing_raw[disambig] = raw
+            # One entry per document so build_sync_plan updates each of them;
+            # _reconcile_desired fans the desired model out under the same aliases.
+            for doc_id, model_instance, raw in docs:
+                alias = _alias_key(key_value, doc_id)
+                index.models[alias] = model_instance
+                index.raw[alias] = raw
+                index.aliases.setdefault(key_value, []).append(alias)
 
-    return existing_models, existing_raw
+    return index
+
+
+def _reconcile_desired(desired: dict[str, Any], existing: _ExistingIndex) -> dict[str, Any]:
+    """Line the desired side up with how duplicates were resolved in *existing*.
+
+    - Keys in ``existing.skipped_keys`` are dropped: the incoming item is
+      neither added as a new document nor used to update the duplicates (which
+      are absent from ``existing`` too, so they are not deleted either).
+    - Keys in ``existing.aliases`` are fanned out: the one desired model is
+      keyed under every alias, so :func:`build_sync_plan` matches — and
+      updates — each duplicate instead of treating the key as brand new.
+
+    Pure function — no I/O.
+    """
+    reconciled: dict[str, Any] = {}
+    for key_value, model in desired.items():
+        if key_value in existing.skipped_keys:
+            continue
+        for key in existing.aliases.get(key_value, [key_value]):
+            reconciled[key] = model
+    return reconciled
 
 
 def _iter_chunks(items: list[Any], size: int) -> Iterator[list[Any]]:

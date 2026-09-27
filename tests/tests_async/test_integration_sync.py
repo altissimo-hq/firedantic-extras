@@ -321,6 +321,64 @@ class TestCollectionSyncEndToEnd:
         found = await User.find()
         assert {u.name for u in found} == {"Alice", "Alice Too"}
 
+    async def test_duplicate_sync_key_skip_leaves_duplicates_and_incoming_alone(
+        self, configure_firedantic, clean_collection
+    ):
+        clean_collection(_prefixed_collection())
+        await AsyncCollectionSync.sync(
+            User,
+            [
+                _make_user("u1", "Alice", "same@example.com"),
+                _make_user("u2", "Alice Too", "same@example.com"),
+                _make_user("u3", "Bob", "bob@example.com"),
+            ],
+            output_writer=None,
+        )
+
+        result = await AsyncCollectionSync.sync(
+            User,
+            [_make_user("u1", "Alice Renamed", "same@example.com")],
+            sync_key="email",
+            on_duplicate_keys="skip",
+            delete_items=True,
+            output_writer=None,
+        )
+
+        assert result.skipped_duplicate_keys == ["same@example.com"]
+        assert (result.adds, result.updates) == (0, 0)
+        assert result.deletes == 1  # Bob: not a duplicate and not desired
+        assert "skipped_duplicates=1" in result.summary()
+
+        found = await User.find()
+        assert {u.name for u in found} == {"Alice", "Alice Too"}
+
+    async def test_duplicate_sync_key_update_all_updates_every_match(self, configure_firedantic, clean_collection):
+        clean_collection(_prefixed_collection())
+        await AsyncCollectionSync.sync(
+            User,
+            [
+                _make_user("u1", "Alice", "same@example.com"),
+                _make_user("u2", "Alice Too", "same@example.com"),
+            ],
+            output_writer=None,
+        )
+
+        result = await AsyncCollectionSync.sync(
+            User,
+            [_make_user("u1", "Alice Renamed", "same@example.com")],
+            sync_key="email",
+            on_duplicate_keys="update_all",
+            diff=True,
+            output_writer=None,
+        )
+
+        assert (result.adds, result.updates, result.deletes) == (0, 2, 0)
+        assert set(result.diffs) == {"same@example.com (doc u1)", "same@example.com (doc u2)"}
+
+        found = await User.find()
+        assert len(found) == 2
+        assert {u.name for u in found} == {"Alice Renamed"}
+
     async def test_summary_output(self, configure_firedantic, clean_collection):
         clean_collection(_prefixed_collection())
 
