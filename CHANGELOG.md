@@ -26,6 +26,10 @@ All notable changes to this project are documented here. The format follows
   `set`, `frozenset` and `tuple[T, ...]` map to `REPEATED` like `list`. Tables
   created from earlier schemas may need these columns migrated, or listed in
   `json_fields` to keep them as `JSON`. (#29)
+- `SecretStr`, `SecretBytes` and `Secret[T]` map to the type of the value they
+  hold (`STRING`, `BYTES`, `T`), which firedantic 0.22.3+ stores; earlier
+  firedantic versions stored a masked placeholder instead
+  (altissimo-hq/firedantic#49).
 
 ## [0.2.1] - 2026-09-28
 
