@@ -6,6 +6,24 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-28
+
+### Changed
+
+- Published on PyPI as `altissimo-firedantic-extras` (the import name is still
+  `firedantic_extras`). Earlier versions were only installable from GitHub
+  under the name `firedantic-extras`.
+- Depends on [`altissimo-firedantic`](https://pypi.org/project/altissimo-firedantic/)
+  `>=0.22.2,<0.23` from PyPI — the Altissimo fork of firedantic, still imported
+  as `firedantic` — instead of a git URL.
+
+### Fixed
+
+- Released versions pinned firedantic to its GitHub `main` branch, so installing
+  0.2.0 pulled whatever firedantic `main` was at install time, and consuming
+  projects' lockfiles recorded `rev=main` even when they pinned a firedantic
+  tag. (#32)
+
 ## [0.2.0] - 2026-09-28
 
 Requires [firedantic](https://github.com/altissimo-hq/firedantic) 0.22.0 or
@@ -80,5 +98,6 @@ later, installed from GitHub (the fork is not on PyPI).
 
 No changelog was kept; see the git history.
 
-[Unreleased]: https://github.com/altissimo-hq/firedantic-extras/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/altissimo-hq/firedantic-extras/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/altissimo-hq/firedantic-extras/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/altissimo-hq/firedantic-extras/compare/5340a71...v0.2.0
