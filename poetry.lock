@@ -2,14 +2,14 @@
 
 [[package]]
 name = "altissimo-firedantic"
-version = "0.22.2"
+version = "0.22.3"
 description = "Pydantic base models for Firestore. Maintained fork of ioxiocom/firedantic."
 optional = false
 python-versions = "<4.0,>=3.10"
 groups = ["main"]
 files = [
-    {file = "altissimo_firedantic-0.22.2-py3-none-any.whl", hash = "sha256:8f4fa3dd8f656b565dc6debd31848ca81d41db28c18e7d0bf8944ae6528b6716"},
-    {file = "altissimo_firedantic-0.22.2.tar.gz", hash = "sha256:abf1d11def16974444b54ba5e5f82fe914dee49da1ce381cc6446bcc909f4833"},
+    {file = "altissimo_firedantic-0.22.3-py3-none-any.whl", hash = "sha256:15800d8bdeab542ede0f3006d24ec898d85b958aae62b621d886fc0e46ac2dee"},
+    {file = "altissimo_firedantic-0.22.3.tar.gz", hash = "sha256:0b976917cb8c35548ba8f8a8ce5c2bb1f0b667fc4a12a6760853825e6d5da3d9"},
 ]
 
 [package.dependencies]
@@ -2115,4 +2115,4 @@ flask = ["flask"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<4.0"
-content-hash = "f5e6780bab98e5d1fd0c05b4c4f553cf73cd846b56843c1dee0f9503fb89b2e3"
+content-hash = "ae6e4599b2fdbb3502d5c229c15a2912556685a00c119eecce74601e5df3a09a"
