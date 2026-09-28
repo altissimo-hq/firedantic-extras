@@ -37,6 +37,7 @@ all = ["fastapi>=0.100", "flask>=2.0", "google-cloud-bigquery>=3.0"]
 [project.urls]
 Homepage = "https://github.com/altissimo-hq/firedantic-extras"
 Repository = "https://github.com/altissimo-hq/firedantic-extras"
+Issues = "https://github.com/altissimo-hq/firedantic-extras/issues"
 Changelog = "https://github.com/altissimo-hq/firedantic-extras/blob/main/CHANGELOG.md"
 
 [tool.poetry]
