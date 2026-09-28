@@ -17,7 +17,7 @@ from typing import Any, Literal
 import pytest
 from firedantic import to_firestore_value
 from google.cloud.bigquery import SchemaField
-from pydantic import BaseModel, EmailStr, Field, GetCoreSchemaHandler, HttpUrl, SecretStr
+from pydantic import BaseModel, EmailStr, Field, GetCoreSchemaHandler, HttpUrl, Secret, SecretBytes, SecretStr
 from pydantic_core import core_schema
 
 from firedantic_extras.bigquery.schema import (
@@ -255,10 +255,7 @@ class TestValidatorMarkerTypes:
         assert f.field_type == "STRING"
 
     def test_secretstr_maps_to_string(self) -> None:
-        """SecretStr's core schema is a nested lax-or-strict/union the
-        core-schema walk declines; its serialized JSON form is a string, and
-        that string is what firedantic stores, so the column is STRING.
-        """
+        """firedantic (0.22.3+) stores a SecretStr's value, a string."""
         schema = model_to_bq_schema(ValidatorMarkerModel)
         f = field_by_name(schema, "secret")
         assert f.field_type == "STRING"
@@ -649,6 +646,9 @@ class StoredFormsModel(BaseModel):
     frozen: frozenset[int]
     nums: tuple[int, ...]
     pair: tuple[int, str]
+    secret: SecretStr
+    key: SecretBytes
+    pin: Secret[int]
     external_id: str = Field(alias="externalId")
     lines: list[Line]
     first_line: Line = Field(alias="firstLine")
@@ -675,6 +675,9 @@ def _stored_forms_instance() -> StoredFormsModel:
         frozen=frozenset({1, 2}),
         nums=(1, 2, 3),
         pair=(1, "a"),
+        secret="hunter2",
+        key=b"k3y",
+        pin=1234,
         externalId="ext-1",
         lines=[{"skuCode": "A-1", "qty": 2}],
         firstLine={"skuCode": "B-2", "qty": 1},
@@ -748,6 +751,9 @@ class TestStoredForms:
             ("frozen", "INTEGER", "REPEATED"),
             ("nums", "INTEGER", "REPEATED"),
             ("pair", "JSON", "NULLABLE"),
+            ("secret", "STRING", "REQUIRED"),
+            ("key", "BYTES", "REQUIRED"),
+            ("pin", "INTEGER", "REQUIRED"),
         ],
     )
     def test_type_follows_stored_value(self, name: str, bq_type: str, mode: str) -> None:

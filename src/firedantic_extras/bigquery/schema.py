@@ -23,7 +23,7 @@ from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal, Union, get_args, get_origin
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, Secret, SecretBytes, SecretStr, TypeAdapter
 
 if TYPE_CHECKING:
     from pydantic.fields import FieldInfo
@@ -231,8 +231,25 @@ def _resolve_via_core_schema(python_type: type) -> str | None:
     return _bq_type_from_core_schema(core_schema)
 
 
+def _unwrap_secret(python_type: Any) -> Any:
+    """The type a pydantic secret holds: firedantic (0.22.3+) stores its value.
+
+    ``SecretStr`` → ``str``, ``SecretBytes`` → ``bytes``, ``Secret[T]`` → ``T``.
+    Anything else is returned unchanged.
+    """
+    if python_type is SecretStr:
+        return str
+    if python_type is SecretBytes:
+        return bytes
+    if get_origin(python_type) is Secret:
+        args = get_args(python_type)
+        return args[0] if args else Any
+    return python_type
+
+
 def _scalar_bq_type(python_type: Any) -> str | None:
     """Return the BQ type string for a scalar type, or None if not scalar."""
+    python_type = _unwrap_secret(python_type)
     if python_type in _SCALAR_MAP:
         return _SCALAR_MAP[python_type]
     # Enums are stored as their value, Literals as themselves: the column type
@@ -290,6 +307,8 @@ def _type_to_bq(python_type: Any) -> tuple[str, tuple[SchemaField, ...]]:
 
     ``sub_fields`` is non-empty only for RECORD types.
     """
+    python_type = _unwrap_secret(python_type)
+
     # None / Any / object → JSON
     if python_type is None or python_type is Any or python_type is object:
         return "JSON", ()
@@ -333,8 +352,9 @@ def _annotation_to_schema_field(
     if field_name in json_fields or column in json_fields:
         return SchemaField(column, "JSON", mode="NULLABLE")
 
-    # Unwrap Optional / X | None
+    # Unwrap Optional / X | None, then a secret wrapper (Secret[list[str]] ...)
     inner_type, is_optional = _unwrap_optional(annotation)
+    inner_type = _unwrap_secret(inner_type)
 
     # Sequences (list / set / frozenset / tuple) are stored as arrays
     is_sequence, element_type = _sequence_element_type(inner_type)
@@ -426,6 +446,9 @@ def model_to_bq_schema(
     * ``timedelta`` → ``FLOAT`` (stored as total seconds).
     * Types stored in their JSON string form (``UUID``, ``HttpUrl``, IP
       addresses, ...) → ``STRING``.
+    * ``SecretStr`` / ``SecretBytes`` / ``Secret[T]`` → the type of the value
+      they hold (``STRING`` / ``BYTES`` / ``T``), which firedantic 0.22.3+
+      stores in plain text.
     * Column names are the fields' aliases, which is how firedantic stores
       them; ``json_fields`` and ``exclude_fields`` accept either name.
     * The Firedantic document ``id`` is always ``STRING NULLABLE`` and is
