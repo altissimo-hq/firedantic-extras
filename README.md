@@ -832,22 +832,34 @@ schema = model_to_bq_schema(Sample)
 
 ### Type Mapping
 
-| Python / Pydantic Type        | BigQuery Type     | Mode                |
-| ----------------------------- | ----------------- | ------------------- |
-| `str`, `Enum`, `Literal[...]` | `STRING`          | `REQUIRED/NULLABLE` |
-| `int`                         | `INTEGER`         | `REQUIRED/NULLABLE` |
-| `float`, `Decimal`            | `FLOAT`/`NUMERIC` | `REQUIRED/NULLABLE` |
-| `bool`                        | `BOOLEAN`         | `REQUIRED/NULLABLE` |
-| `datetime`                    | `TIMESTAMP`       | `REQUIRED/NULLABLE` |
-| `date`                        | `DATE`            | `REQUIRED/NULLABLE` |
-| `time`                        | `TIME`            | `REQUIRED/NULLABLE` |
-| `bytes`                       | `BYTES`           | `REQUIRED/NULLABLE` |
-| `dict` / `dict[str, X]`       | `JSON`            | `NULLABLE`          |
-| `Any` / unknown               | `JSON`            | `NULLABLE`          |
-| Nested `BaseModel`            | `RECORD`          | `REQUIRED/NULLABLE` |
-| `list[scalar]`                | scalar type       | `REPEATED`          |
-| `list[BaseModel]`             | `RECORD`          | `REPEATED`          |
-| `list[dict]` / `list[Any]`    | `JSON`            | `NULLABLE`          |
+The schema describes documents **as firedantic stores them**, not the Python
+annotations. firedantic (0.20+) writes a model with `model_dump(by_alias=True)`
+and converts values Firestore can't hold natively, so column names are field
+aliases and column types follow the stored value:
+
+| Python / Pydantic Type                               | Stored in Firestore as | BigQuery Type | Mode                |
+| ---------------------------------------------------- | ---------------------- | ------------- | ------------------- |
+| `str`, `EmailStr`, str-valued `Enum` / `Literal`     | string                 | `STRING`      | `REQUIRED/NULLABLE` |
+| `int`, `IntEnum`, int-valued `Enum` / `Literal`      | integer                | `INTEGER`     | `REQUIRED/NULLABLE` |
+| `float`, float-valued `Enum`                         | float                  | `FLOAT`       | `REQUIRED/NULLABLE` |
+| `bool`, bool-valued `Enum`                           | boolean                | `BOOLEAN`     | `REQUIRED/NULLABLE` |
+| `Enum` / `Literal` with mixed value types            | mixed                  | `JSON`        | `REQUIRED/NULLABLE` |
+| `datetime`                                           | timestamp              | `TIMESTAMP`   | `REQUIRED/NULLABLE` |
+| `date`                                               | ISO string             | `DATE`        | `REQUIRED/NULLABLE` |
+| `time`                                               | ISO string             | `TIME`        | `REQUIRED/NULLABLE` |
+| `Decimal`                                            | exact string           | `NUMERIC`     | `REQUIRED/NULLABLE` |
+| `timedelta`                                          | total seconds          | `FLOAT`       | `REQUIRED/NULLABLE` |
+| `UUID`, `HttpUrl`, IP addresses, `SecretStr`, …      | JSON string form       | `STRING`      | `REQUIRED/NULLABLE` |
+| `bytes`                                              | bytes                  | `BYTES`       | `REQUIRED/NULLABLE` |
+| `dict` / `dict[str, X]`                              | map                    | `JSON`        | `NULLABLE`          |
+| `Any` / unknown                                      | as is                  | `JSON`        | `NULLABLE`          |
+| Nested `BaseModel`                                   | map (by alias)         | `RECORD`      | `REQUIRED/NULLABLE` |
+| `list` / `set` / `frozenset` / `tuple[T, ...]` of scalars | array             | scalar type   | `REPEATED`          |
+| `list[BaseModel]`                                    | array of maps          | `RECORD`      | `REPEATED`          |
+| `list[dict]` / `list[Any]` / `tuple[int, str]`       | array                  | `JSON`        | `NULLABLE`          |
+
+`NUMERIC` holds up to 9 decimal places; use `json_fields` (or a `BIGNUMERIC`
+column via `extra_fields`) for decimals with more.
 
 **Mode rules:**
 
@@ -855,6 +867,8 @@ schema = model_to_bq_schema(Sample)
 - `Optional[T]` / `T | None` / field with a default → `NULLABLE`
 - `list[T]` → `REPEATED` (BQ does not support `REQUIRED` for repeated fields)
 - `id` is always `STRING NULLABLE` (first field, regardless of model definition)
+- Fields with an alias get the alias as column name; `json_fields` and
+  `exclude_fields` accept either the field name or the alias
 
 ### Backward Compatibility — `json_fields`
 

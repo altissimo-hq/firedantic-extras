@@ -14,6 +14,19 @@ All notable changes to this project are documented here. The format follows
   classifier; building now needs poetry-core 2.2 or later. Added a `Changelog`
   project URL. (#28)
 
+### Fixed
+
+- `bigquery.schema` described fields by their Python annotations rather than
+  the form firedantic stores them in (0.20+), so a Firestore export could fail
+  to load or land in the wrong column type. Column names are now the fields'
+  aliases (firedantic saves `by_alias=True`); `IntEnum` and other int-, float-
+  or bool-valued `Enum`s and `Literal`s map to the type of their values instead
+  of `STRING`; `timedelta` maps to `FLOAT` (total seconds); `UUID`, URLs, IP
+  addresses, `SecretStr` and similar map to `STRING` instead of `JSON`; and
+  `set`, `frozenset` and `tuple[T, ...]` map to `REPEATED` like `list`. Tables
+  created from earlier schemas may need these columns migrated, or listed in
+  `json_fields` to keep them as `JSON`. (#29)
+
 ## [0.2.1] - 2026-09-28
 
 ### Changed

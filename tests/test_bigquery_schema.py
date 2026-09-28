@@ -7,13 +7,17 @@ They exercise type introspection and the public API surface.
 from __future__ import annotations
 
 import enum
-from datetime import date, datetime  # noqa: TC003 — needed at runtime: `from __future__ import annotations`
-from decimal import Decimal  # noqa: TC003 — means pydantic resolves these names against module globals
-from typing import Any
+import ipaddress  # noqa: TC003 — runtime: pydantic resolves annotations against module globals
+import re
+import uuid
+from datetime import date, datetime, time, timedelta
+from decimal import Decimal
+from typing import Any, Literal
 
 import pytest
+from firedantic import to_firestore_value
 from google.cloud.bigquery import SchemaField
-from pydantic import BaseModel, EmailStr, GetCoreSchemaHandler, SecretStr
+from pydantic import BaseModel, EmailStr, Field, GetCoreSchemaHandler, HttpUrl, SecretStr
 from pydantic_core import core_schema
 
 from firedantic_extras.bigquery.schema import (
@@ -250,14 +254,14 @@ class TestValidatorMarkerTypes:
         f = field_by_name(schema, "email")
         assert f.field_type == "STRING"
 
-    def test_secretstr_falls_back_to_json(self) -> None:
-        """SecretStr's core schema is a nested lax-or-strict/union, not a
-        simple wrapper -- rather than mis-map it, the fallback should
-        decline (JSON) rather than guess.
+    def test_secretstr_maps_to_string(self) -> None:
+        """SecretStr's core schema is a nested lax-or-strict/union the
+        core-schema walk declines; its serialized JSON form is a string, and
+        that string is what firedantic stores, so the column is STRING.
         """
         schema = model_to_bq_schema(ValidatorMarkerModel)
         f = field_by_name(schema, "secret")
-        assert f.field_type == "JSON"
+        assert f.field_type == "STRING"
 
 
 # ---------------------------------------------------------------------------
@@ -591,3 +595,176 @@ class TestCompareSchemas:
     def test_empty_schemas_are_equal(self) -> None:
         diff = compare_schemas([], [])
         assert diff.is_equal
+
+
+# ---------------------------------------------------------------------------
+# Stored forms (firedantic 0.20+) — issue #29
+# ---------------------------------------------------------------------------
+
+
+class Priority(enum.IntEnum):
+    LOW = 1
+    HIGH = 2
+
+
+class Weight(enum.Enum):
+    LIGHT = 0.5
+    HEAVY = 2
+
+
+class Flag(enum.Enum):
+    ON = True
+    OFF = False
+
+
+class Mixed(enum.Enum):
+    A = "a"
+    B = 1
+
+
+class Line(BaseModel):
+    sku_code: str = Field(alias="skuCode")
+    qty: int
+
+
+class StoredFormsModel(BaseModel):
+    """One field per interesting type; values below are stored by firedantic."""
+
+    colour: Colour
+    priority: Priority
+    weight: Weight
+    flag: Flag
+    mixed: Mixed
+    level: Literal[1, 2, 3]
+    kind: Literal["a", "b"]
+    due: date
+    at: time
+    when: datetime
+    price: Decimal
+    elapsed: timedelta
+    ref: uuid.UUID
+    link: HttpUrl
+    ip: ipaddress.IPv4Address
+    tags: set[str]
+    frozen: frozenset[int]
+    nums: tuple[int, ...]
+    pair: tuple[int, str]
+    external_id: str = Field(alias="externalId")
+    lines: list[Line]
+    first_line: Line = Field(alias="firstLine")
+
+
+def _stored_forms_instance() -> StoredFormsModel:
+    return StoredFormsModel(
+        colour=Colour.RED,
+        priority=Priority.HIGH,
+        weight=Weight.LIGHT,
+        flag=Flag.ON,
+        mixed=Mixed.B,
+        level=2,
+        kind="a",
+        due=date(2026, 10, 1),
+        at=time(12, 30),
+        when=datetime(2026, 10, 1, 12, 30),
+        price=Decimal("19.99"),
+        elapsed=timedelta(minutes=90),
+        ref=uuid.UUID("12345678-1234-5678-1234-567812345678"),
+        link="https://example.com/x",
+        ip="10.0.0.1",
+        tags={"x", "y"},
+        frozen=frozenset({1, 2}),
+        nums=(1, 2, 3),
+        pair=(1, "a"),
+        externalId="ext-1",
+        lines=[{"skuCode": "A-1", "qty": 2}],
+        firstLine={"skuCode": "B-2", "qty": 1},
+    )
+
+
+# What a BigQuery JSON load accepts for each column type.
+_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_ISO_TIME = re.compile(r"^\d{2}:\d{2}:\d{2}(\.\d+)?$")
+_DECIMAL = re.compile(r"^-?\d+(\.\d+)?$")
+
+
+def _accepts(bq_type: str, value: Any) -> bool:
+    if value is None:
+        return True
+    return {
+        "STRING": lambda v: isinstance(v, str),
+        "INTEGER": lambda v: isinstance(v, int) and not isinstance(v, bool),
+        "FLOAT": lambda v: isinstance(v, int | float) and not isinstance(v, bool),
+        "BOOLEAN": lambda v: isinstance(v, bool),
+        "TIMESTAMP": lambda v: isinstance(v, datetime),
+        "DATE": lambda v: isinstance(v, str) and bool(_ISO_DATE.match(v)),
+        "TIME": lambda v: isinstance(v, str) and bool(_ISO_TIME.match(v)),
+        "NUMERIC": lambda v: isinstance(v, str) and bool(_DECIMAL.match(v)),
+        "BYTES": lambda v: isinstance(v, bytes),
+        "JSON": lambda v: True,
+        "RECORD": lambda v: isinstance(v, dict),
+    }[bq_type](value)
+
+
+def _assert_schema_matches(
+    fields: list[SchemaField] | tuple[SchemaField, ...], stored: dict[str, Any], path: str
+) -> None:
+    for f in fields:
+        assert f.name in stored, f"{path}{f.name}: column not in stored keys {sorted(stored)}"
+        value = stored[f.name]
+        values = value if f.mode == "REPEATED" else [value]
+        if f.mode == "REPEATED":
+            assert isinstance(value, list), f"{path}{f.name}: REPEATED but stored {type(value).__name__}"
+        for v in values:
+            assert _accepts(f.field_type, v), f"{path}{f.name}: {f.field_type} can't hold stored {v!r}"
+            if f.field_type == "RECORD":
+                _assert_schema_matches(f.fields, v, f"{path}{f.name}.")
+
+
+class TestStoredForms:
+    """The schema must describe documents as firedantic stores them."""
+
+    def test_every_column_accepts_the_stored_value(self) -> None:
+        stored = to_firestore_value(_stored_forms_instance().model_dump(by_alias=True))
+        schema = model_to_bq_schema(StoredFormsModel, exclude_fields={"id"})
+
+        _assert_schema_matches(schema, stored, "")
+        assert {f.name for f in schema} == set(stored)
+
+    @pytest.mark.parametrize(
+        ("name", "bq_type", "mode"),
+        [
+            ("colour", "STRING", "REQUIRED"),
+            ("priority", "INTEGER", "REQUIRED"),
+            ("weight", "FLOAT", "REQUIRED"),
+            ("flag", "BOOLEAN", "REQUIRED"),
+            ("mixed", "JSON", "REQUIRED"),
+            ("level", "INTEGER", "REQUIRED"),
+            ("kind", "STRING", "REQUIRED"),
+            ("elapsed", "FLOAT", "REQUIRED"),
+            ("ref", "STRING", "REQUIRED"),
+            ("link", "STRING", "REQUIRED"),
+            ("ip", "STRING", "REQUIRED"),
+            ("tags", "STRING", "REPEATED"),
+            ("frozen", "INTEGER", "REPEATED"),
+            ("nums", "INTEGER", "REPEATED"),
+            ("pair", "JSON", "NULLABLE"),
+        ],
+    )
+    def test_type_follows_stored_value(self, name: str, bq_type: str, mode: str) -> None:
+        f = field_by_name(model_to_bq_schema(StoredFormsModel), name)
+        assert (f.field_type, f.mode) == (bq_type, mode)
+
+    def test_columns_use_aliases_at_every_level(self) -> None:
+        schema = model_to_bq_schema(StoredFormsModel)
+        names = {f.name for f in schema}
+        assert "externalId" in names
+        assert "external_id" not in names
+        assert [sub.name for sub in field_by_name(schema, "lines").fields] == ["skuCode", "qty"]
+        assert [sub.name for sub in field_by_name(schema, "firstLine").fields] == ["skuCode", "qty"]
+
+    def test_json_and_exclude_fields_accept_field_or_alias_name(self) -> None:
+        by_field = model_to_bq_schema(StoredFormsModel, json_fields={"external_id"}, exclude_fields={"first_line"})
+        by_alias = model_to_bq_schema(StoredFormsModel, json_fields={"externalId"}, exclude_fields={"firstLine"})
+        for schema in (by_field, by_alias):
+            assert field_by_name(schema, "externalId").field_type == "JSON"
+            assert "firstLine" not in {f.name for f in schema}

@@ -1,5 +1,13 @@
 """BigQuery schema generation from Firedantic / Pydantic model classes.
 
+The schema describes the documents as firedantic *stores* them, not the
+Python annotations: firedantic (0.20+) writes a model with
+``model_dump(by_alias=True)`` and converts values Firestore can't hold with
+``to_firestore_value()`` -- enums become their value, ``timedelta`` total
+seconds, UUIDs / URLs / IP addresses and similar their JSON string form,
+sets and tuples lists.  Column names are therefore the fields' aliases and
+column types follow the stored value.
+
 Install the optional dependency first::
 
     pip install altissimo-firedantic-extras[bigquery]
@@ -11,7 +19,7 @@ import enum
 import inspect
 import types as _types
 from dataclasses import dataclass
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal, Union, get_args, get_origin
 
@@ -75,7 +83,11 @@ _SCALAR_MAP: dict[type, str] = {
     date: "DATE",
     time: "TIME",
     bytes: "BYTES",
+    # Firestore has no decimal type: firedantic stores the exact string, which
+    # is also BigQuery's recommended input form for NUMERIC.
     Decimal: "NUMERIC",
+    # firedantic stores a timedelta as its total seconds.
+    timedelta: "FLOAT",
 }
 
 # pydantic-core's own scalar schema-node names, keyed the same way _SCALAR_MAP
@@ -92,7 +104,21 @@ _CORE_SCHEMA_SCALAR_MAP: dict[str, str] = {
     "time": "TIME",
     "bytes": "BYTES",
     "decimal": "NUMERIC",
+    "timedelta": "FLOAT",
 }
+
+# JSON-schema "type" of a value's serialized form → BQ type.  firedantic
+# stores values Firestore can't hold natively in pydantic's JSON form, so
+# this is what lands in Firestore for UUIDs, URLs, IP addresses, paths, ...
+_JSON_SCHEMA_TYPE_MAP: dict[str, str] = {
+    "string": "STRING",
+    "integer": "INTEGER",
+    "number": "FLOAT",
+    "boolean": "BOOLEAN",
+}
+
+# Collection types firedantic stores as a Firestore array.
+_SEQUENCE_ORIGINS = (list, set, frozenset, tuple)
 
 # pydantic-core schema node types that wrap a single inner schema under a
 # "schema" key, purely for validation/serialization purposes -- the type
@@ -150,6 +176,43 @@ def _bq_type_from_core_schema(node: Any, _depth: int = 0) -> str | None:
     return None
 
 
+def _values_bq_type(values: list[Any]) -> str:
+    """BQ type for a column holding any of *values* as stored.
+
+    Used for ``Enum`` members (stored as their value) and ``Literal`` choices.
+    ``bool`` is checked first since it is a subclass of ``int``; a mix of
+    ints and floats is FLOAT; anything else mixed can only be JSON.
+    """
+    values = [v.value if isinstance(v, enum.Enum) else v for v in values]
+    if not values or all(isinstance(v, str) for v in values):
+        return "STRING"
+    if all(isinstance(v, bool) for v in values):
+        return "BOOLEAN"
+    if any(isinstance(v, bool) for v in values):
+        return "JSON"
+    if all(isinstance(v, int) for v in values):
+        return "INTEGER"
+    if all(isinstance(v, int | float) for v in values):
+        return "FLOAT"
+    return "JSON"
+
+
+def _resolve_via_json_schema(python_type: type) -> str | None:
+    """Resolve a BQ type from the JSON form pydantic serializes the type to.
+
+    firedantic stores values Firestore can't hold natively via pydantic's
+    ``to_jsonable_python``, so a ``UUID``, ``HttpUrl``, ``IPv4Address``,
+    ``Path``, ``SecretStr`` ... ends up in Firestore as a string.  The
+    serialization JSON schema says which JSON type that is.
+    """
+    try:
+        json_schema = TypeAdapter(python_type).json_schema(mode="serialization")
+    except Exception:  # not every class is a valid pydantic type
+        return None
+    json_type = json_schema.get("type")
+    return _JSON_SCHEMA_TYPE_MAP.get(json_type) if isinstance(json_type, str) else None
+
+
 def _resolve_via_core_schema(python_type: type) -> str | None:
     """Resolve a BQ type via pydantic-core's actual validation schema.
 
@@ -172,10 +235,13 @@ def _scalar_bq_type(python_type: Any) -> str | None:
     """Return the BQ type string for a scalar type, or None if not scalar."""
     if python_type in _SCALAR_MAP:
         return _SCALAR_MAP[python_type]
+    # Enums are stored as their value, Literals as themselves: the column type
+    # follows the values (checked before the subclass scan, so an IntEnum is
+    # INTEGER because its values are ints, not because it subclasses int).
     if inspect.isclass(python_type) and issubclass(python_type, enum.Enum):
-        return "STRING"
+        return _values_bq_type(list(python_type))
     if get_origin(python_type) is Literal:
-        return "STRING"
+        return _values_bq_type(list(get_args(python_type)))
     if inspect.isclass(python_type):
         # Subclasses of a scalar type (e.g. a plain `class MyId(str): ...`)
         # aren't exact dict-key matches above but should map to the same BQ
@@ -187,10 +253,36 @@ def _scalar_bq_type(python_type: Any) -> str | None:
         # Not a real subclass of anything scalar, and not a nested model --
         # fall back to what pydantic-core actually validates it to.
         if not issubclass(python_type, BaseModel):
-            resolved = _resolve_via_core_schema(python_type)
+            resolved = _resolve_via_core_schema(python_type) or _resolve_via_json_schema(python_type)
             if resolved is not None:
                 return resolved
     return None
+
+
+def _sequence_element_type(python_type: Any) -> tuple[bool, Any]:
+    """``(True, element_type)`` if firedantic stores *python_type* as an array.
+
+    ``list[T]``, ``set[T]``, ``frozenset[T]`` and ``tuple[T, ...]`` are all
+    written as a Firestore array of ``T``.  A fixed-shape tuple like
+    ``tuple[int, str]`` is an array too, but of mixed types, so its element
+    type is ``Any`` (→ JSON).
+    """
+    origin = get_origin(python_type)
+    if python_type in _SEQUENCE_ORIGINS:
+        return True, Any
+    if origin not in _SEQUENCE_ORIGINS:
+        return False, None
+    args = get_args(python_type)
+    if origin is tuple:
+        if len(args) == 2 and args[1] is Ellipsis:
+            return True, args[0]
+        return True, args[0] if len(set(args)) == 1 else Any
+    return True, args[0] if args else Any
+
+
+def _column_name(field_name: str, field_info: FieldInfo) -> str:
+    """The key firedantic stores the field under: its (serialization) alias."""
+    return field_info.serialization_alias or field_info.alias or field_name
 
 
 def _type_to_bq(python_type: Any) -> tuple[str, tuple[SchemaField, ...]]:
@@ -234,40 +326,43 @@ def _annotation_to_schema_field(
     json_fields: set[str],
 ) -> SchemaField:
     """Convert a single Pydantic field annotation to a ``SchemaField``."""
-    # json_fields override → always JSON NULLABLE (backward-compat escape hatch)
-    if field_name in json_fields:
-        return SchemaField(field_name, "JSON", mode="NULLABLE")
+    column = _column_name(field_name, field_info)
+
+    # json_fields override → always JSON NULLABLE (backward-compat escape hatch).
+    # Matches the field name or the stored (alias) name.
+    if field_name in json_fields or column in json_fields:
+        return SchemaField(column, "JSON", mode="NULLABLE")
 
     # Unwrap Optional / X | None
     inner_type, is_optional = _unwrap_optional(annotation)
 
-    # Check for list
-    origin = get_origin(inner_type)
-    if origin is list:
-        args = get_args(inner_type)
-        element_type = args[0] if args else Any
-
+    # Sequences (list / set / frozenset / tuple) are stored as arrays
+    is_sequence, element_type = _sequence_element_type(inner_type)
+    if is_sequence:
         # Unwrap Optional element (e.g. list[str | None])
         element_type, _ = _unwrap_optional(element_type)
 
         # list[dict] / list[Any] / list[object] → JSON NULLABLE
         # (BQ has no REPEATED JSON type)
         if _is_dict_like(element_type) or element_type is Any or element_type is object:
-            return SchemaField(field_name, "JSON", mode="NULLABLE")
+            return SchemaField(column, "JSON", mode="NULLABLE")
 
         # list[BaseModel] → REPEATED RECORD
         if inspect.isclass(element_type) and issubclass(element_type, BaseModel):
             sub = _model_to_fields(element_type, json_fields=set(), exclude_fields=set(), is_nested=True)
-            return SchemaField(field_name, "RECORD", mode="REPEATED", fields=tuple(sub))
+            return SchemaField(column, "RECORD", mode="REPEATED", fields=tuple(sub))
 
         # list[scalar / enum / Literal] → REPEATED <type>
         bq_type, sub_fields = _type_to_bq(element_type)
-        return SchemaField(field_name, bq_type, mode="REPEATED", fields=sub_fields)
+        if bq_type == "JSON":
+            # BQ has no REPEATED JSON; store the whole array as one JSON value
+            return SchemaField(column, "JSON", mode="NULLABLE")
+        return SchemaField(column, bq_type, mode="REPEATED", fields=sub_fields)
 
     # Scalar / dict / nested BaseModel
     mode = _field_mode(is_optional, field_info)
     bq_type, sub_fields = _type_to_bq(inner_type)
-    return SchemaField(field_name, bq_type, mode=mode, fields=sub_fields)
+    return SchemaField(column, bq_type, mode=mode, fields=sub_fields)
 
 
 def _model_to_fields(
@@ -288,7 +383,7 @@ def _model_to_fields(
     for field_name, field_info in model_class.model_fields.items():
         if field_name == "id":
             continue  # handled above for top-level; not a stored field in Firestore
-        if field_name in exclude_fields:
+        if field_name in exclude_fields or _column_name(field_name, field_info) in exclude_fields:
             continue
 
         annotation = field_info.annotation
@@ -319,13 +414,20 @@ def model_to_bq_schema(
 
     * Required Pydantic fields → ``REQUIRED`` mode.
     * ``Optional[T]`` / ``T | None`` / fields with defaults → ``NULLABLE``.
-    * ``list[T]`` where *T* is a scalar → ``REPEATED <type>``.
+    * ``list[T]`` / ``set[T]`` / ``frozenset[T]`` / ``tuple[T, ...]`` where
+      *T* is a scalar → ``REPEATED <type>`` (all are stored as arrays).
     * ``list[BaseModel]`` → ``REPEATED RECORD``.
     * ``list[dict]`` / ``list[Any]`` → ``JSON NULLABLE``
       (BQ does not support ``REPEATED JSON``).
     * ``dict`` / ``Dict`` / ``dict[str, X]`` → ``JSON``.
     * Nested ``BaseModel`` subclass → ``RECORD`` with auto-derived sub-fields.
-    * ``Enum`` / ``Literal`` → ``STRING``.
+    * ``Enum`` / ``Literal`` → the type of their values as stored
+      (``STRING`` for string values, ``INTEGER`` for an ``IntEnum``, ...).
+    * ``timedelta`` → ``FLOAT`` (stored as total seconds).
+    * Types stored in their JSON string form (``UUID``, ``HttpUrl``, IP
+      addresses, ...) → ``STRING``.
+    * Column names are the fields' aliases, which is how firedantic stores
+      them; ``json_fields`` and ``exclude_fields`` accept either name.
     * The Firedantic document ``id`` is always ``STRING NULLABLE`` and is
       always the first field in the schema (unless excluded).
 
