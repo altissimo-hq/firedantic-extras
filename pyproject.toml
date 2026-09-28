@@ -20,7 +20,7 @@ classifiers = [
 
 [tool.poetry.dependencies]
 python = "^3.10"
-firedantic = ">=0.13"
+firedantic = { git = "https://github.com/altissimo-hq/firedantic.git", branch = "main" }
 google-cloud-firestore = ">=2.0"
 pydantic = ">=2.0"
 # Optional integrations — pulled in by the extras below (pip install
