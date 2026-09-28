@@ -22,9 +22,9 @@ def _stub_model_class() -> MagicMock:
     model_class.find = Mock(return_value=[])
     model_class.count = Mock(return_value=0)
     model_class.get_collection_name.return_value = "kits"
-    # Stand-in for firedantic's full-ordering rule: the given sort, then the
+    # Stand-in for firedantic's get_full_ordering(): the given sort, then the
     # document ID in the direction of the last given ordering.
-    model_class._get_full_ordering = lambda _filter, order_by: [
+    model_class.get_full_ordering = lambda _filter, order_by: [
         *order_by,
         ("__name__", order_by[-1][1] if order_by else "ASCENDING"),
     ]
@@ -66,14 +66,14 @@ class TestFindCall:
         """Inequality-filtered fields must be ordered before __name__ — that
         rule lives in firedantic, and cursor_paginate uses its answer verbatim."""
         model_class = _stub_model_class()
-        model_class._get_full_ordering = MagicMock(
+        model_class.get_full_ordering = MagicMock(
             return_value=[("barcode", "ASCENDING"), ("score", "ASCENDING"), ("__name__", "ASCENDING")]
         )
         filter_ = {"score": {op.GTE: 5}}
 
         cursor_paginate(model_class, limit=10, order_by="barcode", filter_=filter_, direction="prev")
 
-        model_class._get_full_ordering.assert_called_once_with(filter_, [("barcode", "ASCENDING")])
+        model_class.get_full_ordering.assert_called_once_with(filter_, [("barcode", "ASCENDING")])
         assert model_class.find.call_args.kwargs["order_by"] == [
             ("barcode", "DESCENDING"),
             ("score", "DESCENDING"),

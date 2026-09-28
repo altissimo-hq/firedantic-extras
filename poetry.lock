@@ -651,7 +651,7 @@ files = [
 
 [[package]]
 name = "firedantic"
-version = "0.21.1"
+version = "0.22.0"
 description = "Pydantic base models for Firestore"
 optional = false
 python-versions = "^3.10"
@@ -668,7 +668,7 @@ pydantic = "^2.12.4"
 type = "git"
 url = "https://github.com/altissimo-hq/firedantic.git"
 reference = "main"
-resolved_reference = "ea8c56027590a8076cd4c9e1c3f95557c1ed0230"
+resolved_reference = "9578480a3db900bc1c1b214f03251f4d1b77d067"
 
 [[package]]
 name = "flask"

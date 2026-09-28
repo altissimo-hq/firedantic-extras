@@ -8,7 +8,7 @@ All argument validation, sort-order planning and page assembly is in
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, TypeVar, cast
+from typing import TYPE_CHECKING, TypeVar
 
 from firedantic import AsyncBareModel, ModelNotFoundError
 from google.api_core.exceptions import FailedPrecondition
@@ -24,7 +24,6 @@ from firedantic_extras.common.pagination import (
 
 if TYPE_CHECKING:
     from firedantic_extras.common.filters import FilterDict
-    from firedantic_extras.common.pagination import OrderByPairs
 
 logger = logging.getLogger(__name__)
 
@@ -58,10 +57,7 @@ async def _cursor_paginate_once(
     # inside $or / $and — so we don't keep a copy of the rule here.  For the
     # prev direction every field is reversed so start_after + limit works
     # instead of limit_to_last; the rows are flipped back below.
-    # (firedantic types the helper with plain ``str`` directions; ``list`` is
-    # invariant, so hand it a copy typed that way.)
-    sort_pairs: list[tuple[str, str]] = list(plan.order_by)
-    ordering = cast("OrderByPairs", model_class._get_full_ordering(plan.filter_, sort_pairs))
+    ordering = model_class.get_full_ordering(plan.filter_, plan.order_by)
     if direction == "prev":
         ordering = _reverse_pairs(ordering)
 
