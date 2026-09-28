@@ -1,87 +1,34 @@
 """Cursor-based pagination for Firedantic models — the Firestore round-trips.
 
 All argument validation, sort-order planning and page assembly is in
-:mod:`firedantic_extras.common.pagination`; this module only builds the query,
-resolves the cursor document, streams the rows and applies the
-``fallback_order_by`` retry.
+:mod:`firedantic_extras.common.pagination`; this module only runs the
+``find()`` / ``count()`` calls and applies the ``fallback_order_by`` retry.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, TypeVar, cast
 
-from firedantic import AsyncBareModel
+from firedantic import AsyncBareModel, ModelNotFoundError
 from google.api_core.exceptions import FailedPrecondition
 
-from firedantic_extras._async.query import async_count_model
-from firedantic_extras.common.filters import FilterDict, _apply_filter_dict
 from firedantic_extras.common.pagination import (
     CursorPage,
     Direction,
     OrderByInput,
     _assemble_page,
     _plan_page,
+    _reverse_pairs,
 )
 
 if TYPE_CHECKING:
-    from google.cloud.firestore_v1.async_query import AsyncQuery
+    from firedantic_extras.common.filters import FilterDict
+    from firedantic_extras.common.pagination import OrderByPairs
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=AsyncBareModel)
-
-
-def _build_query(
-    model_class: type[AsyncBareModel],
-    ordered_pairs: list[tuple[str, str]],
-    filter_: FilterDict | None,
-) -> AsyncQuery:
-    """Build a Firestore query with filters and an explicit ordered sort list.
-
-    The caller is responsible for including the ``__name__`` tiebreaker in
-    *ordered_pairs* (see :func:`~firedantic_extras.common.pagination._plan_page`).
-    """
-    query: AsyncQuery = model_class._get_col_ref()
-
-    if filter_:
-        query = _apply_filter_dict(query, filter_)
-
-    for field, direction in ordered_pairs:
-        query = query.order_by(field, direction=direction)
-
-    return query
-
-
-async def _fetch_cursor_snapshot(
-    model_class: type[AsyncBareModel],
-    cursor_doc_id: str,
-) -> Any:
-    """Fetch the Firestore DocumentSnapshot for the given document ID.
-
-    This is the one extra read per page-turn that allows us to use
-    ``start_after(snapshot)`` without needing to encode complex field values
-    into the cursor token.
-
-    Args:
-        model_class: The model whose collection contains the cursor document.
-        cursor_doc_id: The document ID of the cursor document.
-
-    Returns:
-        A Firestore ``DocumentSnapshot``.
-
-    Raises:
-        ValueError: If the cursor document does not exist in Firestore.
-    """
-    col_ref = model_class._get_col_ref()
-    doc_ref = col_ref.document(cursor_doc_id)
-    snapshot = await doc_ref.get()
-    if not snapshot.exists:
-        raise ValueError(
-            f"Cursor document {cursor_doc_id!r} not found in "
-            f"collection {col_ref.id!r}. The document may have been deleted."
-        )
-    return snapshot
 
 
 async def _cursor_paginate_once(
@@ -105,21 +52,43 @@ async def _cursor_paginate_once(
         exclude_null_sort_field=exclude_null_sort_field,
     )
 
-    query = _build_query(model_class, plan.pairs, plan.filter_)
-    if cursor is not None:
-        query = query.start_after(await _fetch_cursor_snapshot(model_class, cursor))
-    query = query.limit(plan.fetch_limit)
+    # A cursor is only unambiguous under the *full* ordering Firestore uses:
+    # the caller's sort, then every inequality-filtered field, then __name__
+    # (which must come last).  firedantic computes that — including fields
+    # inside $or / $and — so we don't keep a copy of the rule here.  For the
+    # prev direction every field is reversed so start_after + limit works
+    # instead of limit_to_last; the rows are flipped back below.
+    # (firedantic types the helper with plain ``str`` directions; ``list`` is
+    # invariant, so hand it a copy typed that way.)
+    sort_pairs: list[tuple[str, str]] = list(plan.order_by)
+    ordering = cast("OrderByPairs", model_class._get_full_ordering(plan.filter_, sort_pairs))
+    if direction == "prev":
+        ordering = _reverse_pairs(ordering)
 
-    snapshots = [snap async for snap in query.stream()]
+    try:
+        # ``find`` resolves a bare document ID against the model's collection,
+        # which is exactly what ``next_cursor`` / ``prev_cursor`` hold.  That
+        # is the one extra read per page-turn.
+        items = await model_class.find(
+            plan.filter_,
+            order_by=ordering,
+            limit=plan.fetch_limit,
+            start_after=cursor,
+        )
+    except ModelNotFoundError as exc:
+        raise ValueError(
+            f"Cursor document {cursor!r} not found in "
+            f"collection {model_class.get_collection_name()!r}. The document may have been deleted."
+        ) from exc
+
     if direction == "prev":
         # The prev query runs with every sort reversed; flip back to ascending.
-        snapshots.reverse()
+        items.reverse()
 
-    total = await async_count_model(model_class, filter_=plan.filter_) if include_total else None
+    total = await model_class.count(plan.filter_) if include_total else None
 
     return _assemble_page(
-        model_class,
-        snapshots,
+        items,
         limit=limit,
         direction=direction,
         has_cursor=cursor is not None,
@@ -166,7 +135,7 @@ async def async_cursor_paginate(
         direction:      ``"next"`` (default) moves forward in the sort order;
                         ``"prev"`` moves backward.
         filter_:        Optional Firedantic-style filter dict — same format as
-                        ``BareModel.find()``.
+                        ``BareModel.find()``, including ``$or`` / ``$and``.
         order_by:       Sort specification.  A field name string, or a list of
                         strings / ``(field, direction)`` tuples.  Direction
                         must be ``"ASCENDING"`` or ``"DESCENDING"``.
@@ -183,17 +152,22 @@ async def async_cursor_paginate(
                         ``filter_`` entry already present for that field.
         fallback_order_by: If the query raises ``FailedPrecondition`` (a
                         missing Firestore composite index for this
-                        filter + ``order_by`` combination), retry once with
-                        this sort spec instead.  The cursor and direction are
-                        reset (``cursor=None``, ``direction="next"``) since a
-                        cursor encoded for one sort order is meaningless
-                        under another.  :attr:`CursorPage.used_fallback` is
-                        ``True`` on the returned page so callers can flash a
-                        message.  With no ``fallback_order_by``, a
-                        ``FailedPrecondition`` propagates as usual.
+                        filter + ``order_by`` combination — firedantic's
+                        ``MissingIndexError``, whose message names the index
+                        to add), retry once with this sort spec instead.  The
+                        cursor and direction are reset (``cursor=None``,
+                        ``direction="next"``) since a cursor encoded for one
+                        sort order is meaningless under another.
+                        :attr:`CursorPage.used_fallback` is ``True`` on the
+                        returned page so callers can flash a message.  With no
+                        ``fallback_order_by``, the error propagates as usual.
 
     Returns:
         A :class:`CursorPage` instance.
+
+    Raises:
+        ValueError: If ``limit`` < 1, the ``exclude_null_sort_field`` options
+                    conflict, or the ``cursor`` document no longer exists.
 
     Example::
 
@@ -215,6 +189,15 @@ async def async_cursor_paginate(
             Kit,
             limit=50,
             filter_=build_prefix_filters("barcode", "DA-0001"),
+            order_by="barcode",
+        )
+
+        # OR filters, nested with $and
+        from firedantic import operators as op
+        page = await async_cursor_paginate(
+            Kit,
+            limit=50,
+            filter_={op.OR: [{"status": "new"}, {op.AND: [{"status": "open"}, {"priority": {op.GTE: 3}}]}]},
             order_by="barcode",
         )
 
@@ -251,11 +234,12 @@ async def async_cursor_paginate(
             include_total=include_total,
             exclude_null_sort_field=exclude_null_sort_field,
         )
-    except FailedPrecondition:
+    except FailedPrecondition as exc:
         if fallback_order_by is None:
             raise
         logger.warning(
-            "cursor_paginate: FailedPrecondition for %s with order_by=%r; retrying with fallback_order_by=%r",
+            "cursor_paginate: %s for %s with order_by=%r; retrying with fallback_order_by=%r",
+            exc,
             model_class.__name__,
             order_by,
             fallback_order_by,

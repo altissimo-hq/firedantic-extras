@@ -131,7 +131,24 @@ page = cursor_paginate(
     order_by=[("price", "ASCENDING"), ("name", "ASCENDING")],
     filter_={"price": {">=": 10.0, "<": 100.0}},
 )
+
+# OR filters (firedantic 0.18+): top-level keys are ANDed, $or takes a list
+# of filter dicts and nests with $and
+from firedantic import operators as op
+
+page = cursor_paginate(
+    Product,
+    limit=20,
+    order_by="name",
+    filter_={
+        "in_stock": True,
+        op.OR: [{"category": "electronics"}, {op.AND: [{"category": "toys"}, {"price": {op.LT: 20}}]}],
+    },
+)
 ```
+
+The filter dict is handed straight to firedantic's `find()`, so anything it
+accepts works here, in `count_model()` and in the Flask/FastAPI adapters.
 
 ### Compound Sort
 
@@ -264,6 +281,9 @@ electronics_count = count_model(Product, filter_={"category": "electronics"})
 ```
 
 Uses Firestore's native `COUNT` aggregation — no documents are transferred.
+A thin wrapper over firedantic's `Model.count()`, kept so the sync and async
+variants share one import and the `filter_` convention (including `$or` /
+`$and`) matches `cursor_paginate`.
 
 ```python
 def count_model(

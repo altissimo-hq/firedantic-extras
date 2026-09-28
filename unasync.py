@@ -53,6 +53,11 @@ SUBS: list[tuple[str, str]] = [
     (r"\basync for\b", "for"),
     (r"\basync with\b", "with"),
     (r"\bawait ", ""),
+    # unittest.mock: AsyncMock assertions -> Mock assertions
+    (r"\bassert_awaited", "assert_called"),
+    (r"\bassert_not_awaited\b", "assert_not_called"),
+    (r"\bawait_args", "call_args"),
+    (r"\bawait_count\b", "call_count"),
     (r"\b__aiter__\b", "__iter__"),
     (r"\b__anext__\b", "__next__"),
     (r"\bStopAsyncIteration\b", "StopIteration"),

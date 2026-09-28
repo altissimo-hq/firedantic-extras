@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
-
-from firedantic_extras.common.filters import FilterDict, _apply_filter_dict
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from firedantic import AsyncBareModel
-    from google.cloud.firestore_v1.async_query import AsyncQuery
+
+    from firedantic_extras.common.filters import FilterDict
 
 
 async def async_count_model(
@@ -20,10 +19,13 @@ async def async_count_model(
     Uses Firestore's native server-side COUNT aggregation — zero documents are
     transferred over the wire regardless of collection size.
 
-    Accepts the same ``filter_`` dict convention as ``BareModel.find()``:
+    A thin wrapper over firedantic's ``Model.count()`` (0.16+), kept so that
+    callers have one place to import the sync and async variants from and so
+    the ``filter_`` convention matches ``cursor_paginate``:
     - ``{"field": value}`` → equality filter
     - ``{"field": {">=": value}}`` → comparison filter
     - ``{"field": {">=": low, "<": high}}`` → multiple operators on one field
+    - ``{"$or": [filter, ...]}`` / ``{"$and": [filter, ...]}`` → composites
 
     Args:
         model_class: The Firedantic model class whose collection to count.
@@ -38,11 +40,4 @@ async def async_count_model(
         dog_kits = await async_count_model(Kit, filter_={"species": "dog"})
         recent = await async_count_model(Order, filter_={"created_at": {">=": cutoff}})
     """
-    query: AsyncQuery = model_class._get_col_ref()
-    if filter_:
-        query = _apply_filter_dict(query, filter_)
-    # google-cloud-firestore annotates ``count()`` as returning the aggregation
-    # *class* rather than an instance, which trips mypy on ``.get()``.
-    aggregation: Any = query.count()
-    result = await aggregation.get()
-    return int(result[0][0].value)
+    return await model_class.count(filter_)
