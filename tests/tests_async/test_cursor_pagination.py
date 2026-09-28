@@ -5,6 +5,8 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from firedantic import ModelNotFoundError
+from firedantic import operators as op
 from google.api_core.exceptions import FailedPrecondition
 
 from firedantic_extras._async import cursor_pagination as cursor_pagination_module
@@ -13,21 +15,98 @@ from firedantic_extras.common.pagination import CursorPage
 
 
 def _stub_model_class() -> MagicMock:
-    """A model_class whose Firestore query chain returns no results.
-
-    Every chained call (where/order_by/limit) returns the same mock so the
-    query-building loop doesn't produce an unconfigured, unstreamable mock.
-    MagicMock iterates over whatever ``__aiter__.return_value`` holds.
-    """
-    query = MagicMock()
-    query.where.return_value = query
-    query.order_by.return_value = query
-    query.limit.return_value = query
-    query.stream.return_value.__aiter__.return_value = []
-
-    model_class = MagicMock()
-    model_class._get_col_ref.return_value = query
+    """A model_class whose ``find()`` returns no results."""
+    model_class = MagicMock(__name__="Kit")
+    model_class.find = AsyncMock(return_value=[])
+    model_class.count = AsyncMock(return_value=0)
+    model_class.get_collection_name.return_value = "kits"
+    # Stand-in for firedantic's full-ordering rule: the given sort, then the
+    # document ID in the direction of the last given ordering.
+    model_class._get_full_ordering = lambda _filter, order_by: [
+        *order_by,
+        ("__name__", order_by[-1][1] if order_by else "ASCENDING"),
+    ]
     return model_class
+
+
+@pytest.mark.asyncio
+class TestFindCall:
+    """What reaches firedantic's ``find()`` — the filter is passed through
+    untouched, the sort gets the ``__name__`` tiebreak, and the cursor is
+    handed over as the document ID it is.
+    """
+
+    async def test_filter_including_or_is_passed_through_verbatim(self) -> None:
+        model_class = _stub_model_class()
+        filter_ = {op.OR: [{"status": "new"}, {op.AND: [{"status": "open"}, {"priority": {op.GTE: 3}}]}]}
+
+        await async_cursor_paginate(model_class, limit=10, order_by="barcode", filter_=filter_)
+
+        model_class.find.assert_awaited_once_with(
+            filter_,
+            order_by=[("barcode", "ASCENDING"), ("__name__", "ASCENDING")],
+            limit=11,
+            start_after=None,
+        )
+
+    async def test_prev_direction_reverses_sort_and_passes_cursor(self) -> None:
+        model_class = _stub_model_class()
+
+        await async_cursor_paginate(model_class, limit=10, order_by="barcode", cursor="doc-7", direction="prev")
+
+        model_class.find.assert_awaited_once_with(
+            None,
+            order_by=[("barcode", "DESCENDING"), ("__name__", "DESCENDING")],
+            limit=11,
+            start_after="doc-7",
+        )
+
+    async def test_full_ordering_comes_from_the_model(self) -> None:
+        """Inequality-filtered fields must be ordered before __name__ — that
+        rule lives in firedantic, and cursor_paginate uses its answer verbatim."""
+        model_class = _stub_model_class()
+        model_class._get_full_ordering = MagicMock(
+            return_value=[("barcode", "ASCENDING"), ("score", "ASCENDING"), ("__name__", "ASCENDING")]
+        )
+        filter_ = {"score": {op.GTE: 5}}
+
+        await async_cursor_paginate(model_class, limit=10, order_by="barcode", filter_=filter_, direction="prev")
+
+        model_class._get_full_ordering.assert_called_once_with(filter_, [("barcode", "ASCENDING")])
+        assert model_class.find.await_args.kwargs["order_by"] == [
+            ("barcode", "DESCENDING"),
+            ("score", "DESCENDING"),
+            ("__name__", "DESCENDING"),
+        ]
+
+    async def test_exclude_null_sort_field_adds_not_null_filter(self) -> None:
+        model_class = _stub_model_class()
+
+        await async_cursor_paginate(model_class, order_by="order_id", exclude_null_sort_field=True)
+
+        assert model_class.find.await_args.args[0] == {"order_id": {"!=": None}}
+
+    async def test_missing_cursor_document_raises_value_error(self) -> None:
+        model_class = _stub_model_class()
+        model_class.find = AsyncMock(side_effect=ModelNotFoundError("Cursor document 'kits/gone' does not exist"))
+
+        with pytest.raises(ValueError, match="'gone' not found in collection 'kits'"):
+            await async_cursor_paginate(model_class, order_by="barcode", cursor="gone")
+
+    async def test_include_total_counts_with_the_effective_filter(self) -> None:
+        model_class = _stub_model_class()
+        model_class.count = AsyncMock(return_value=42)
+
+        page = await async_cursor_paginate(
+            model_class,
+            order_by="order_id",
+            filter_={"category": "X"},
+            exclude_null_sort_field=True,
+            include_total=True,
+        )
+
+        assert page.total == 42
+        model_class.count.assert_awaited_once_with({"category": "X", "order_id": {"!=": None}})
 
 
 @pytest.mark.asyncio

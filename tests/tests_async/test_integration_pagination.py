@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pytest
 from firedantic import AsyncModel
+from firedantic import operators as op
 
 from firedantic_extras.cursor_pagination import CursorPage, async_cursor_paginate
 from firedantic_extras.query import async_count_model, build_prefix_filters
@@ -293,6 +294,46 @@ class TestCursorPaginateFilters:
         page = await async_cursor_paginate(Widget, limit=10, order_by="label", filter_={"category": "nonexistent"})
         assert page.items == []
         assert page.has_next is False
+
+
+# ---------------------------------------------------------------------------
+# cursor_paginate / count_model — $or / $and filters (firedantic 0.18+)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+class TestOrFilters:
+    async def test_or_filter_pages_and_counts(self, configure_firedantic: None) -> None:
+        await _make_widgets(["a", "b"], category="X")
+        await _make_widgets(["c"], category="Y")
+        await _make_widgets(["d"], category="Z")
+        filters = {op.OR: [{"category": "X"}, {"category": "Z"}]}
+
+        page1 = await async_cursor_paginate(Widget, limit=2, order_by="label", filter_=filters, include_total=True)
+        assert _all_labels(page1) == ["a", "b"]
+        assert page1.has_next is True
+        assert page1.total == 3
+
+        page2 = await async_cursor_paginate(
+            Widget, limit=2, order_by="label", filter_=filters, cursor=page1.next_cursor, direction="next"
+        )
+        assert _all_labels(page2) == ["d"]
+        assert page2.has_next is False
+        assert await async_count_model(Widget, filter_=filters) == 3
+
+    async def test_nested_and_inside_or_with_top_level_and(self, configure_firedantic: None) -> None:
+        await Widget(label="keep-x", score=1, category="X").save()
+        await Widget(label="keep-y-high", score=9, category="Y").save()
+        await Widget(label="drop-y-low", score=1, category="Y").save()
+        await Widget(label="drop-z", score=9, category="Z").save()
+        filters = {
+            "score": {op.GTE: 1},  # top-level keys are ANDed with the $or
+            op.OR: [{"category": "X"}, {op.AND: [{"category": "Y"}, {"score": {op.GTE: 5}}]}],
+        }
+
+        page = await async_cursor_paginate(Widget, limit=10, order_by="label", filter_=filters)
+        assert _all_labels(page) == ["keep-x", "keep-y-high"]
 
 
 # ---------------------------------------------------------------------------

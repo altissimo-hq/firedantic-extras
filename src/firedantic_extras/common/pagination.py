@@ -10,18 +10,29 @@ of lines.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Protocol, TypeVar, cast
 
+# (Final literals keep ASCENDING / DESCENDING assignable to firedantic's
+# OrderDirection.)
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
+    from firedantic.common import OrderDirection
+
     from firedantic_extras.common.filters import FilterDict
 
-T = TypeVar("T")
+
+class _Paged(Protocol):
+    """What a page item must offer: firedantic models qualify."""
+
+    def get_document_id(self) -> str | None: ...
+
+
+T = TypeVar("T", bound=_Paged)
 
 # Firedantic / Firestore direction literals
-ASCENDING = "ASCENDING"
-DESCENDING = "DESCENDING"
+ASCENDING: Final = "ASCENDING"
+DESCENDING: Final = "DESCENDING"
 
 OrderByInput = str | list[str | tuple[str, str]]
 """
@@ -29,6 +40,9 @@ Flexible order_by input:
 - ``"field"``                       → sort field ASC
 - ``["field1", ("field2", "DESCENDING")]``  → mixed list
 """
+
+#: Validated ``(field, direction)`` pairs — what firedantic's ``find()`` takes.
+OrderByPairs = list[tuple[str, "OrderDirection"]]
 
 Direction = Literal["next", "prev"]
 
@@ -62,13 +76,13 @@ class CursorPage(BaseModel, Generic[T]):
     used_fallback: bool = False
 
 
-def _normalise_order_by(order_by: OrderByInput | None) -> list[tuple[str, str]]:
+def _normalise_order_by(order_by: OrderByInput | None) -> OrderByPairs:
     """Convert the flexible OrderByInput into a list of (field, direction) pairs."""
     if order_by is None:
         return []
     if isinstance(order_by, str):
         return [(order_by, ASCENDING)]
-    result: list[tuple[str, str]] = []
+    result: OrderByPairs = []
     for item in order_by:
         if isinstance(item, str):
             result.append((item, ASCENDING))
@@ -76,39 +90,13 @@ def _normalise_order_by(order_by: OrderByInput | None) -> list[tuple[str, str]]:
             field, direction = item
             if direction not in (ASCENDING, DESCENDING):
                 raise ValueError(f"Invalid sort direction {direction!r}. Use {ASCENDING!r} or {DESCENDING!r}.")
-            result.append((field, direction))
+            result.append((field, cast("OrderDirection", direction)))
     return result
 
 
-def _with_tiebreaker(
-    pairs: list[tuple[str, str]],
-    direction: str = ASCENDING,
-) -> list[tuple[str, str]]:
-    """Append ``__name__`` as the final tiebreak field.
-
-    Firestore silently skips duplicates at page boundaries without a unique
-    final sort key.  ``__name__`` (the document ID) is always unique.
-    """
-    return [*pairs, ("__name__", direction)]
-
-
-def _reverse_pairs(pairs: list[tuple[str, str]]) -> list[tuple[str, str]]:
+def _reverse_pairs(pairs: OrderByPairs) -> OrderByPairs:
     """Flip every sort direction in *pairs* (ASCENDING ↔ DESCENDING)."""
     return [(field, ASCENDING if direction == DESCENDING else DESCENDING) for field, direction in pairs]
-
-
-def _hydrate(
-    model_class: type[T],
-    snapshot: Any,
-) -> T:
-    """Hydrate a raw ``DocumentSnapshot`` into a model instance."""
-    doc_id: str = snapshot.id
-    data: dict[str, Any] = snapshot.to_dict() or {}
-    doc_id_field: str = model_class.__document_id__  # type: ignore[attr-defined]
-    data[doc_id_field] = doc_id
-    instance = model_class(**data)
-    setattr(instance, doc_id_field, doc_id)
-    return instance
 
 
 @dataclass(frozen=True)
@@ -118,15 +106,17 @@ class _PagePlan:
     Attributes:
         filter_:     The effective filter dict (``exclude_null_sort_field``
                      may have added a ``!=`` clause to the caller's filter).
-        pairs:       Ordered ``(field, direction)`` list to apply — already
-                     includes the ``__name__`` tiebreaker and is reversed for
+        order_by:    The caller's sort, validated, as ``(field, direction)``
+                     pairs.  The I/O layer completes it (inequality-filtered
+                     fields, then the ``__name__`` tiebreak) with firedantic's
+                     full-ordering helper and reverses it for
                      ``direction="prev"``.
         fetch_limit: ``limit + 1`` — the extra row is a sentinel used to detect
                      whether another page exists without a COUNT query.
     """
 
     filter_: FilterDict | None
-    pairs: list[tuple[str, str]]
+    order_by: OrderByPairs
     fetch_limit: int
 
 
@@ -151,19 +141,11 @@ def _plan_page(
             )
         filter_ = {**(filter_ or {}), sort_field: {"!=": None}}
 
-    # Canonical sort pairs (user fields + __name__ tiebreaker).  For the prev
-    # direction every sort field is reversed so we can use start_after + limit
-    # (+ .stream()) instead of limit_to_last; the fetched rows are flipped back
-    # into ascending order by the caller.
-    fwd_pairs = _with_tiebreaker(order_by_pairs, ASCENDING)
-    pairs = fwd_pairs if direction == "next" else _reverse_pairs(fwd_pairs)
-
-    return _PagePlan(filter_=filter_, pairs=pairs, fetch_limit=limit + 1)
+    return _PagePlan(filter_=filter_, order_by=order_by_pairs, fetch_limit=limit + 1)
 
 
 def _assemble_page(
-    model_class: type[T],
-    snapshots: list[Any],
+    items: list[T],
     *,
     limit: int,
     direction: Direction,
@@ -171,9 +153,9 @@ def _assemble_page(
     total: int | None,
     used_fallback: bool,
 ) -> CursorPage[T]:
-    """Turn the fetched snapshots (already in ascending order) into a page.
+    """Turn the fetched models (already in ascending order) into a page.
 
-    ``snapshots`` must be at most ``limit + 1`` rows.  The sentinel row, when
+    ``items`` must be at most ``limit + 1`` rows.  The sentinel row, when
     present, is at the END for ``direction="next"`` and at the START for
     ``direction="prev"`` (the prev query runs reversed and the caller flips the
     result list, so the row fetched "furthest back" comes first).
@@ -181,22 +163,20 @@ def _assemble_page(
     fetch_limit = limit + 1
 
     if direction == "next":
-        has_next = len(snapshots) == fetch_limit
+        has_next = len(items) == fetch_limit
         has_prev = has_cursor
         if has_next:
-            snapshots = snapshots[:limit]  # drop sentinel at the end
+            items = items[:limit]  # drop sentinel at the end
     else:  # prev
-        has_prev = len(snapshots) == fetch_limit
+        has_prev = len(items) == fetch_limit
         has_next = has_cursor
         if has_prev:
-            snapshots = snapshots[1:]  # drop sentinel at the start
-
-    items = [_hydrate(model_class, snap) for snap in snapshots]
+            items = items[1:]  # drop sentinel at the start
 
     # next_cursor → ID of the last visible item  (direction="next" to go fwd)
     # prev_cursor → ID of the first visible item (direction="prev" to go bwd)
-    next_cursor: str | None = snapshots[-1].id if items and has_next else None
-    prev_cursor: str | None = snapshots[0].id if items and has_prev else None
+    next_cursor = items[-1].get_document_id() if items and has_next else None
+    prev_cursor = items[0].get_document_id() if items and has_prev else None
 
     return CursorPage(
         items=items,
