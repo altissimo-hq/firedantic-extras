@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- A `py.typed` marker (PEP 561), so type checkers use the package's type hints.
+  Without it, mypy skipped the package and typed everything imported from it as
+  `Any`.
+
+### Changed
+
+- CI tests Python 3.10 to 3.14, matching the declared classifiers (it tested
+  3.11 to 3.13), and uses `actions/checkout` / `actions/setup-python` v7, pinned
+  by commit, replacing the Node 20 based v4 / v5.
+
 ## [0.3.0] - 2026-09-28
 
 Requires altissimo-firedantic 0.22.3 or later.
