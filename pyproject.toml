@@ -1,10 +1,11 @@
 [tool.poetry]
-name = "firedantic-extras"
-version = "0.2.0"
+name = "altissimo-firedantic-extras"
+version = "0.2.1"
 description = "Add-on utilities for Firedantic: collection sync, FastAPI pagination, BigQuery schema generation"
 authors = ["Lukas Karlsson <karlsson@altissimo.io>"]
 license = "BSD-3-Clause"
 readme = "README.md"
+homepage = "https://github.com/altissimo-hq/firedantic-extras"
 repository = "https://github.com/altissimo-hq/firedantic-extras"
 packages = [
     { include = "firedantic_extras", from = "src" }
@@ -20,11 +21,13 @@ classifiers = [
 
 [tool.poetry.dependencies]
 python = "^3.10"
-firedantic = { git = "https://github.com/altissimo-hq/firedantic.git", branch = "main" }
+# The Altissimo fork of firedantic, published as altissimo-firedantic
+# (import name is still `firedantic`).
+altissimo-firedantic = ">=0.22.2,<0.23"
 google-cloud-firestore = ">=2.0"
 pydantic = ">=2.0"
 # Optional integrations — pulled in by the extras below (pip install
-# firedantic-extras[flask] etc.). Declared here, not as dependency groups:
+# altissimo-firedantic-extras[flask] etc.). Declared here, not as dependency groups:
 # Poetry only exports an extra to package metadata when its packages are
 # optional entries of the main dependency table.
 fastapi = { version = ">=0.100", optional = true }

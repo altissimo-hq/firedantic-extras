@@ -2,7 +2,7 @@
 
 Install the optional dependency first::
 
-    pip install firedantic-extras[bigquery]
+    pip install altissimo-firedantic-extras[bigquery]
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ try:
 except ImportError as _exc:
     raise ImportError(
         "google-cloud-bigquery is required for BigQuery schema generation. "
-        "Install it with: pip install firedantic-extras[bigquery]"
+        "Install it with: pip install altissimo-firedantic-extras[bigquery]"
     ) from _exc
 
 # ---------------------------------------------------------------------------

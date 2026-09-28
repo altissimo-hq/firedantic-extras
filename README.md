@@ -565,26 +565,27 @@ styling or a different CSS framework.
 
 ## Installation
 
-Requires [firedantic](https://github.com/altissimo-hq/firedantic) 0.22.0 or
-later. The fork isn't on PyPI, so it is pinned to GitHub
-(`git+https://github.com/altissimo-hq/firedantic.git`) and resolved from
-there when this package is installed.
+Published on PyPI as `altissimo-firedantic-extras`; the import name is
+`firedantic_extras`. It depends on
+[`altissimo-firedantic`](https://pypi.org/project/altissimo-firedantic/), the
+Altissimo fork of firedantic (imported as `firedantic`). Don't install it
+alongside upstream `firedantic` — both provide the `firedantic` package.
 
 ```bash
 # Core (includes update_collection)
-pip install firedantic-extras
+pip install altissimo-firedantic-extras
 
 # With FastAPI pagination support
-pip install firedantic-extras[fastapi]
+pip install altissimo-firedantic-extras[fastapi]
 
 # With Flask pagination support
-pip install firedantic-extras[flask]
+pip install altissimo-firedantic-extras[flask]
 
 # With BigQuery schema generation
-pip install firedantic-extras[bigquery]
+pip install altissimo-firedantic-extras[bigquery]
 
 # Everything
-pip install firedantic-extras[all]
+pip install altissimo-firedantic-extras[all]
 ```
 
 ---

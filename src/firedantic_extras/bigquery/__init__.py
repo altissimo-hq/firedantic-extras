@@ -6,7 +6,7 @@ Usage::
 
 Requires the optional dependency::
 
-    pip install firedantic-extras[bigquery]
+    pip install altissimo-firedantic-extras[bigquery]
 """
 
 from firedantic_extras.bigquery.schema import (
