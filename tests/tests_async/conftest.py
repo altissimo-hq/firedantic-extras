@@ -21,16 +21,15 @@ if TYPE_CHECKING:
     from google.cloud.firestore_v1.client import Client
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def configure_firedantic(firestore_client: Client) -> None:
     """Register firedantic configurations backed by the emulator.
 
-    Function-scoped on purpose: ``configuration.add`` replaces the named config
-    and drops any lazily-built client, so each test builds a fresh one.  That
-    matters for the async flavour, where pytest-asyncio gives every test its
-    own event loop and a gRPC channel must not outlive the loop it was created
-    on.  Depends on ``firestore_client`` only for its ``FIRESTORE_EMULATOR_HOST``
-    side effect.
+    Session-scoped: since firedantic 0.15 a lazily created async client is
+    recreated when it is used from a different event loop than the one it was
+    built on, so the per-test event loops pytest-asyncio hands out no longer
+    need a per-test configuration.  Depends on ``firestore_client`` only for
+    its ``FIRESTORE_EMULATOR_HOST`` side effect.
     """
     # Default configuration
     configuration.add(
