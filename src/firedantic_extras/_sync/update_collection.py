@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from firedantic.configurations import configuration
+from firedantic import get_batch
 
 from firedantic_extras.common.sync_plan import (
     OnDuplicateKeys,
@@ -34,7 +34,6 @@ from firedantic_extras.common.sync_plan import (
     _index_desired,
     _iter_chunks,
     _load_existing_doc,
-    _model_data,
     _reconcile_desired,
     _resolve_duplicates,
     _SyncPlan,
@@ -77,6 +76,8 @@ def _fetch_existing(
 
     # First pass: collect all snapshots grouped by key value so we can detect
     # and handle duplicates before committing anything to the result dicts.
+    # The raw snapshot data is what the diff compares against, so this stays
+    # on the collection stream rather than find().
     seen: dict[str, list[_ExistingDoc]] = {}
 
     for doc_snap in model._get_col_ref().stream():
@@ -94,20 +95,27 @@ def _fetch_existing(
 def _apply_plan(
     plan: _SyncPlan,
     model: type[BareModel],
+    existing_by_doc_id: dict[str, BareModel],
     *,
     chunk_size: int,
     dry_run: bool,
     on_error: OnError,
     output_writer: Callable[[str], None] | None,
 ) -> SyncResult:
-    """Apply a :class:`_SyncPlan` to Firestore using batched writes.
+    """Apply a :class:`_SyncPlan` to Firestore using firedantic's batched writes.
 
     This is the only I/O-heavy step.  All logic (what to write, what to skip)
-    has already been decided by :func:`build_sync_plan`.
+    has already been decided by :func:`build_sync_plan`.  Every write goes
+    through the model — ``save(batch=...)`` for adds and updates (a full
+    ``set``, so stale fields are removed) and ``delete(batch=...)`` for
+    deletes — so ID generation, aliases, stored-value conversion and
+    ``__db_config__`` routing are firedantic's.
 
     Args:
         plan:          The sync plan to execute.
         model:         The Firedantic model class (used for config + col ref).
+        existing_by_doc_id: The existing documents' model instances by
+                       document ID, for the deletes.
         chunk_size:    Max operations per Firestore batch commit (≤ 500).
         dry_run:       When ``True``, skip all writes — return a result that
                        reflects what *would* have happened.
@@ -122,8 +130,6 @@ def _apply_plan(
 
     doc_id_field = model.__document_id__
     config_name = getattr(model, "__db_config__", "(default)")
-    client = configuration.get_client(config_name)
-    col_ref = model._get_col_ref()
 
     def _log(msg: str) -> None:
         if output_writer:
@@ -138,15 +144,13 @@ def _apply_plan(
     if plan.to_add:
         _log(f"{'[DRY RUN] ' if dry_run else ''}Adding {len(plan.to_add)} document(s)...")
         for chunk in _iter_chunks(plan.to_add, chunk_size):
-            batch = client.batch()
+            batch = get_batch(config_name)
             batch_count = 0
             for model_instance in chunk:
                 try:
-                    doc_id = model_instance.get_document_id()
-                    data = _model_data(model_instance, doc_id_field)
-                    doc_ref = col_ref.document(doc_id) if doc_id else col_ref.document()
                     if not dry_run:
-                        batch.set(doc_ref, data)
+                        # Generates and sets the ID on the model if it has none.
+                        model_instance.save(batch=batch)
                     result.adds += 1
                     batch_count += 1
                 except Exception as exc:
@@ -157,14 +161,16 @@ def _apply_plan(
     if plan.to_update:
         _log(f"{'[DRY RUN] ' if dry_run else ''}Updating {len(plan.to_update)} document(s)...")
         for chunk in _iter_chunks(plan.to_update, chunk_size):
-            batch = client.batch()
+            batch = get_batch(config_name)
             batch_count = 0
             for doc_id, model_instance in chunk:
                 try:
-                    data = _model_data(model_instance, doc_id_field)
-                    doc_ref = col_ref.document(doc_id)
                     if not dry_run:
-                        batch.set(doc_ref, data)
+                        # The existing document's ID wins (sync_key matching may
+                        # have paired the item with a differently-named doc, and
+                        # "update_all" pairs one item with several); a copy keeps
+                        # the caller's instance untouched.
+                        model_instance.model_copy(update={doc_id_field: doc_id}).save(batch=batch)
                     result.updates += 1
                     batch_count += 1
                 except Exception as exc:
@@ -175,13 +181,12 @@ def _apply_plan(
     if plan.to_delete:
         _log(f"{'[DRY RUN] ' if dry_run else ''}Deleting {len(plan.to_delete)} document(s)...")
         for chunk in _iter_chunks(plan.to_delete, chunk_size):
-            batch = client.batch()
+            batch = get_batch(config_name)
             batch_count = 0
             for doc_id in chunk:
                 try:
-                    doc_ref = col_ref.document(doc_id)
                     if not dry_run:
-                        batch.delete(doc_ref)
+                        existing_by_doc_id[doc_id].delete(batch=batch)
                     result.deletes += 1
                     batch_count += 1
                 except Exception as exc:
@@ -318,6 +323,7 @@ class CollectionSync:
         result = _apply_plan(
             plan,
             self._model,
+            {doc_id: m for m in existing.models.values() if (doc_id := m.get_document_id()) is not None},
             chunk_size=self._chunk_size,
             dry_run=self._dry_run,
             on_error=self._on_error,

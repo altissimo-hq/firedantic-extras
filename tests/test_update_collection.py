@@ -22,6 +22,7 @@ from firedantic import Model
 from firedantic_extras.common.sync_plan import (
     _ExistingDoc,
     _ExistingIndex,
+    _model_data,
     _reconcile_desired,
     _resolve_duplicates,
 )
@@ -60,6 +61,48 @@ def _user(uid: str, name: str, email: str, active: bool = True) -> User:
 def _raw(name: str, email: str, active: bool = True) -> dict:
     """Simulate the raw Firestore payload (without the doc-ID field)."""
     return {"name": name, "email": email, "active": active}
+
+
+# ---------------------------------------------------------------------------
+# TestModelData — the payload the diff compares and save() writes
+# ---------------------------------------------------------------------------
+
+
+class TestModelData:
+    def test_drops_document_id_and_keeps_plain_fields(self):
+        assert _model_data(_user("u1", "Alice", "a@e.com"), "id") == _raw("Alice", "a@e.com")
+
+    def test_converts_values_the_way_firedantic_stores_them(self):
+        import enum
+        from datetime import date
+        from decimal import Decimal
+
+        class Status(enum.Enum):
+            OPEN = "open"
+
+        class Ticket(Model):
+            __collection__ = "tickets"
+            status: Status
+            due: date
+            price: Decimal
+
+        data = _model_data(Ticket(id="t1", status=Status.OPEN, due=date(2026, 10, 1), price=Decimal("19.99")), "id")
+        # Enum -> value, date -> ISO string, Decimal -> exact string: what
+        # Firestore holds after firedantic's save(), so a re-sync compares equal.
+        assert data == {"status": "open", "due": "2026-10-01", "price": "19.99"}
+
+    def test_drops_aliased_document_id_by_its_alias(self):
+        from firedantic import BareModel
+        from pydantic import Field
+
+        class Aliased(BareModel):  # BareModel: no built-in ``id`` field
+            __collection__ = "aliased"
+            __document_id__ = "key"
+            key: str | None = Field(default=None, alias="_key")
+            name: str
+
+        model = Aliased(_key="k1", name="x")
+        assert _model_data(model, "key") == {"name": "x"}
 
 
 # ---------------------------------------------------------------------------

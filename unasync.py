@@ -42,6 +42,7 @@ SUBS: list[tuple[str, str]] = [
     (r"google\.cloud\.firestore_v1\.async_query", "google.cloud.firestore_v1.query"),
     # firedantic
     (r"\bget_async_client\b", "get_client"),
+    (r"\bget_async_batch\b", "get_batch"),
     # firedantic-extras public names
     (r"\basync_cursor_paginate\b", "cursor_paginate"),
     (r"\basync_count_model\b", "count_model"),

@@ -13,6 +13,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
+from firedantic import to_firestore_value
+
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
 
@@ -209,13 +211,30 @@ def _compute_field_diffs(
     return DocumentDiff(doc_id=doc_id, sync_key_value=sync_key_value, changes=changes)
 
 
-def _model_data(model_instance: Any, doc_id_field: str) -> dict[str, Any]:
-    """Dump a model for writing/comparison, minus its document-ID field.
+def _document_id_key(model_class: type[Any], doc_id_field: str) -> str:
+    """The key ``model_dump(by_alias=True)`` uses for the document-ID field.
 
-    The ID lives in the document path, not the document body, so it must never
-    be compared or written as data.
+    That is its alias when it has one — the same key firedantic's ``save()``
+    drops from the payload.
     """
-    return {k: v for k, v in model_instance.model_dump(by_alias=True).items() if k != doc_id_field}
+    model_field = getattr(model_class, "model_fields", {}).get(doc_id_field)
+    alias = getattr(model_field, "alias", None)
+    return alias or doc_id_field
+
+
+def _model_data(model_instance: Any, doc_id_field: str) -> dict[str, Any]:
+    """The document firedantic's ``save()`` would write for *model_instance*.
+
+    Built the same way: ``model_dump(by_alias=True)``, minus the document-ID
+    field (the ID lives in the document path, not the body), converted with
+    ``to_firestore_value`` — so enums, dates, decimals and the like compare
+    equal to what Firestore actually stores and a sync of unchanged data
+    reports skips rather than rewriting every document.
+    """
+    data = model_instance.model_dump(by_alias=True)
+    data.pop(_document_id_key(type(model_instance), doc_id_field), None)
+    converted: dict[str, Any] = to_firestore_value(data)
+    return converted
 
 
 # ---------------------------------------------------------------------------
@@ -274,7 +293,8 @@ def build_sync_plan(
             # a mismatch between the ID field and the stored value (common when
             # the model's id field appears in the raw dict) is never treated as
             # a data change.
-            existing_data = {k: v for k, v in raw.items() if k != doc_id_field}
+            id_keys = {doc_id_field, _document_id_key(type(desired_model), doc_id_field)}
+            existing_data = {k: v for k, v in raw.items() if k not in id_keys}
             incoming_data = _model_data(desired_model, doc_id_field)
 
             if incoming_data == existing_data:

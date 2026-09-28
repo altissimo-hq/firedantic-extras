@@ -16,7 +16,10 @@ Or start the emulator first::
 from __future__ import annotations
 
 import contextlib
+import enum
 import uuid
+from datetime import date
+from decimal import Decimal
 
 import pytest
 from firedantic import AsyncModel, ModelNotFoundError
@@ -25,7 +28,7 @@ from firedantic_extras.update_collection import AsyncCollectionSync, DuplicateKe
 from tests.conftest import COLLECTION_PREFIX
 
 # ---------------------------------------------------------------------------
-# Test model
+# Test models
 # ---------------------------------------------------------------------------
 
 
@@ -35,6 +38,21 @@ class User(AsyncModel):
     name: str
     email: str
     active: bool = True
+
+
+class Status(enum.Enum):
+    OPEN = "open"
+    DONE = "done"
+
+
+class Ticket(AsyncModel):
+    """Field types Firestore can't store natively — firedantic converts them."""
+
+    __collection__ = "tickets"
+
+    status: Status
+    due: date
+    price: Decimal
 
 
 def _prefixed_collection() -> str:
@@ -295,6 +313,33 @@ class TestCollectionSyncEndToEnd:
 
         assert result.updates == 1
         assert result.adds == 0
+
+        # The existing document was updated in place — no new doc for the
+        # incoming item's own ID, and the caller's instance keeps its ID.
+        found = await User.find()
+        assert [(u.id, u.name) for u in found] == [("u1", "Alice Updated")]
+
+    async def test_stored_value_conversions_do_not_cause_perpetual_updates(
+        self, configure_firedantic, clean_collection
+    ):
+        """Enums, dates and decimals are stored in converted form (firedantic
+        0.20); the diff must compare against that form, or every sync would
+        rewrite every such document."""
+        clean_collection(f"{COLLECTION_PREFIX}tickets")
+        desired = [
+            Ticket(id="t1", status=Status.OPEN, due=date(2026, 10, 1), price=Decimal("19.99")),
+            Ticket(id="t2", status=Status.DONE, due=date(2026, 10, 2), price=Decimal("5")),
+        ]
+
+        first = await AsyncCollectionSync.sync(Ticket, desired, output_writer=None)
+        assert (first.adds, first.updates) == (2, 0)
+
+        second = await AsyncCollectionSync.sync(Ticket, desired, diff=True, output_writer=None)
+        assert (second.adds, second.updates, second.skips) == (0, 0, 2), second.diffs
+
+        # And they read back as the model types.
+        t1 = await Ticket.get_by_id("t1")
+        assert (t1.status, t1.due, t1.price) == (Status.OPEN, date(2026, 10, 1), Decimal("19.99"))
 
     async def test_duplicate_sync_key_raises_by_default(self, configure_firedantic, clean_collection):
         """Two existing docs sharing a sync_key value abort the sync unless told otherwise."""

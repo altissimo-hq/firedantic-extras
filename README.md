@@ -582,6 +582,14 @@ models), so stale or extra fields stored in Firestore are visible and will
 trigger updates — ensuring Firestore always converges to the exact shape
 described by the model.
 
+The incoming side is compared in the form firedantic stores it
+(`to_firestore_value()`: enums as their value, dates as ISO strings,
+decimals as strings, …), so a re-sync of unchanged models reports skips
+rather than rewriting every document with such fields. Writes go through
+firedantic's batched `save(batch=...)` / `delete(batch=...)`, so ID
+generation, field aliases and `__db_config__` routing behave exactly as
+they do for a single `save()`.
+
 ### Quick Start
 
 ```python
