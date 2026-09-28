@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Package metadata moved to the standard PEP 621 `[project]` table. The licence
+  is declared as an SPDX expression (PEP 639), so the wheel carries
+  `License-Expression: BSD-3-Clause` and no longer the redundant licence
+  classifier; building now needs poetry-core 2.2 or later. Added a `Changelog`
+  project URL. (#28)
+
 ## [0.2.1] - 2026-09-28
 
 ### Changed

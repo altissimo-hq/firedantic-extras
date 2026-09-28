@@ -14,7 +14,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: pipx install poetry==2.0.1
+      - run: pipx install poetry==2.4.1
       - run: poetry sync --with dev --all-extras
       - run: poetry run pre-commit run --all-files
 
@@ -28,7 +28,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: pipx install poetry==2.0.1
+      - run: pipx install poetry==2.4.1
       - run: poetry sync --with dev --all-extras
       # The threshold is a smoke check (did the suite actually run?), not a
       # target. Integration tests need the emulator and don't run here, so the
@@ -43,5 +43,5 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: pipx install poetry==2.0.1
+      - run: pipx install poetry==2.4.1
       - run: poetry build
