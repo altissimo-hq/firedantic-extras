@@ -5,7 +5,7 @@ with ``firedantic.Model`` (sync) and the ``async_`` / ``Async`` name with
 ``firedantic.AsyncModel``.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 from firedantic_extras.cursor_pagination import CursorPage, async_cursor_paginate, cursor_paginate
 from firedantic_extras.query import async_count_model, build_prefix_filters, count_model

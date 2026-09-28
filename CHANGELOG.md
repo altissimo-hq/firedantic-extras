@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-09-28
+
 ### Added
 
 - A `py.typed` marker (PEP 561), so type checkers use the package's type hints.
@@ -139,7 +141,8 @@ later, installed from GitHub (the fork is not on PyPI).
 
 No changelog was kept; see the git history.
 
-[Unreleased]: https://github.com/altissimo-hq/firedantic-extras/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/altissimo-hq/firedantic-extras/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/altissimo-hq/firedantic-extras/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/altissimo-hq/firedantic-extras/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/altissimo-hq/firedantic-extras/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/altissimo-hq/firedantic-extras/compare/5340a71...v0.2.0
