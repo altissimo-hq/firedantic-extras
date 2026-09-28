@@ -1,44 +1,49 @@
-[tool.poetry]
+[project]
 name = "altissimo-firedantic-extras"
 version = "0.2.1"
 description = "Add-on utilities for Firedantic: collection sync, FastAPI pagination, BigQuery schema generation"
-authors = ["Lukas Karlsson <karlsson@altissimo.io>"]
+authors = [{ name = "Lukas Karlsson", email = "karlsson@altissimo.io" }]
 license = "BSD-3-Clause"
+license-files = ["LICENSE"]
 readme = "README.md"
-homepage = "https://github.com/altissimo-hq/firedantic-extras"
-repository = "https://github.com/altissimo-hq/firedantic-extras"
-packages = [
-    { include = "firedantic_extras", from = "src" }
-]
+requires-python = ">=3.10,<4.0"
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: BSD License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Database",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
+dependencies = [
+    # The Altissimo fork of firedantic, published as altissimo-firedantic
+    # (import name is still `firedantic`).
+    "altissimo-firedantic>=0.22.2,<0.23",
+    "google-cloud-firestore>=2.0",
+    "pydantic>=2.0",
+]
 
-[tool.poetry.dependencies]
-python = "^3.10"
-# The Altissimo fork of firedantic, published as altissimo-firedantic
-# (import name is still `firedantic`).
-altissimo-firedantic = ">=0.22.2,<0.23"
-google-cloud-firestore = ">=2.0"
-pydantic = ">=2.0"
-# Optional integrations — pulled in by the extras below (pip install
-# altissimo-firedantic-extras[flask] etc.). Declared here, not as dependency groups:
-# Poetry only exports an extra to package metadata when its packages are
-# optional entries of the main dependency table.
-fastapi = { version = ">=0.100", optional = true }
-flask = { version = ">=2.0", optional = true }
-google-cloud-bigquery = { version = ">=3.0", optional = true }
+[project.optional-dependencies]
+# pip install altissimo-firedantic-extras[flask] etc.
+fastapi = ["fastapi>=0.100"]
+flask = ["flask>=2.0"]
+bigquery = ["google-cloud-bigquery>=3.0"]
+all = ["fastapi>=0.100", "flask>=2.0", "google-cloud-bigquery>=3.0"]
 
-[tool.poetry.extras]
-fastapi = ["fastapi"]
-flask = ["flask"]
-bigquery = ["google-cloud-bigquery"]
-all = ["fastapi", "flask", "google-cloud-bigquery"]
+[project.urls]
+Homepage = "https://github.com/altissimo-hq/firedantic-extras"
+Repository = "https://github.com/altissimo-hq/firedantic-extras"
+Changelog = "https://github.com/altissimo-hq/firedantic-extras/blob/main/CHANGELOG.md"
+
+[tool.poetry]
+# Only Poetry-specific settings live here; package metadata is in [project].
+packages = [
+    { include = "firedantic_extras", from = "src" }
+]
 
 [tool.poetry.group.dev.dependencies]
 mypy = "^1.15.0"
@@ -50,7 +55,7 @@ email-validator = ">=2.0"
 pytest-asyncio = ">=1.0"
 
 [build-system]
-requires = ["poetry-core>=2.0.0"]
+requires = ["poetry-core>=2.2.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.ruff]

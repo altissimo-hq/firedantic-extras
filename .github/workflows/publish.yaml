@@ -17,7 +17,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: pipx install poetry==2.0.1
+      - run: pipx install poetry==2.4.1
       - run: poetry sync --with dev --all-extras
       - run: poetry run pytest -q
       - name: Check the tag matches the package version
