@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-28
+
+Requires altissimo-firedantic 0.22.3 or later.
+
 ### Changed
 
 - Package metadata moved to the standard PEP 621 `[project]` table. The licence
@@ -123,6 +127,7 @@ later, installed from GitHub (the fork is not on PyPI).
 
 No changelog was kept; see the git history.
 
-[Unreleased]: https://github.com/altissimo-hq/firedantic-extras/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/altissimo-hq/firedantic-extras/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/altissimo-hq/firedantic-extras/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/altissimo-hq/firedantic-extras/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/altissimo-hq/firedantic-extras/compare/5340a71...v0.2.0
