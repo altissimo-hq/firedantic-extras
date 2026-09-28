@@ -565,7 +565,7 @@ styling or a different CSS framework.
 
 ## Installation
 
-Requires [firedantic](https://github.com/altissimo-hq/firedantic) 0.21.1 or
+Requires [firedantic](https://github.com/altissimo-hq/firedantic) 0.22.0 or
 later. The fork isn't on PyPI, so it is pinned to GitHub
 (`git+https://github.com/altissimo-hq/firedantic.git`) and resolved from
 there when this package is installed.

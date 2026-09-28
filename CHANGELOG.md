@@ -8,7 +8,7 @@ All notable changes to this project are documented here. The format follows
 
 ## [0.2.0] - 2026-09-28
 
-Requires [firedantic](https://github.com/altissimo-hq/firedantic) 0.21.1 or
+Requires [firedantic](https://github.com/altissimo-hq/firedantic) 0.22.0 or
 later, installed from GitHub (the fork is not on PyPI).
 
 ### Added
@@ -46,7 +46,7 @@ later, installed from GitHub (the fork is not on PyPI).
   dependencies, so `pip install firedantic-extras[flask]` actually installs
   flask; `fastapi-pagination`, which nothing used, is no longer pulled in by the
   `fastapi` extra. (#22)
-- firedantic is pinned to the GitHub repository's `main` branch; the lockfile
+- firedantic is pinned to the GitHub repository's `main` branch (0.22.0); the lockfile
   records the exact commit. (#23)
 
 ### Fixed
