@@ -1,6 +1,6 @@
 [project]
 name = "altissimo-firedantic-extras"
-version = "0.3.1"
+version = "0.4.0"
 description = "Add-on utilities for Firedantic: collection sync, FastAPI pagination, BigQuery schema generation"
 authors = [{ name = "Lukas Karlsson", email = "karlsson@altissimo.io" }]
 license = "BSD-3-Clause"
