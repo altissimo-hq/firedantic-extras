@@ -55,6 +55,15 @@ class Ticket(AsyncModel):
     price: Decimal
 
 
+class Order(AsyncModel):
+    """email_sent_at is written by another process, not the sync."""
+
+    __collection__ = "orders"
+
+    status: str
+    email_sent_at: str | None = None
+
+
 def _prefixed_collection() -> str:
     """Return the full collection name as it appears in Firestore (with prefix)."""
     return f"{COLLECTION_PREFIX}users"
@@ -423,6 +432,45 @@ class TestCollectionSyncEndToEnd:
         found = await User.find()
         assert len(found) == 2
         assert {u.name for u in found} == {"Alice Renamed"}
+
+    async def test_preserve_fields_keeps_another_writers_fields(self, configure_firedantic, clean_collection):
+        """A webhook sets email_sent_at (on the model) and audit (not on it);
+        a sync that knows neither updates the doc without losing them."""
+        clean_collection(f"{COLLECTION_PREFIX}orders")
+
+        await AsyncCollectionSync.sync(Order, [Order(id="o1", status="processing")], output_writer=None)
+
+        from firedantic.configurations import configuration as cfg
+
+        doc_ref = cfg.get_async_client().collection(f"{COLLECTION_PREFIX}orders").document("o1")
+        # set(merge=True) takes keys literally, so "stale.dotted" is one
+        # top-level field, not a nested path.
+        await doc_ref.set(
+            {"email_sent_at": "2026-10-01", "audit": "webhook", "legacy": "stale", "stale.dotted": 1},
+            merge=True,
+        )
+
+        result = await AsyncCollectionSync.sync(
+            Order,
+            [Order(id="o1", status="completed")],
+            preserve_fields=["email_sent_at", "audit"],
+            diff=True,
+            output_writer=None,
+        )
+
+        assert result.updates == 1
+        assert {c.field for c in result.diffs["o1"].changes} == {"status", "legacy", "stale.dotted"}
+        stored = (await doc_ref.get()).to_dict()
+        assert stored == {"status": "completed", "email_sent_at": "2026-10-01", "audit": "webhook"}
+
+        # Nothing else changed: the preserved fields alone don't cause an update.
+        again = await AsyncCollectionSync.sync(
+            Order,
+            [Order(id="o1", status="completed")],
+            preserve_fields=["email_sent_at", "audit"],
+            output_writer=None,
+        )
+        assert (again.updates, again.skips) == (0, 1)
 
     async def test_summary_output(self, configure_firedantic, clean_collection):
         clean_collection(_prefixed_collection())

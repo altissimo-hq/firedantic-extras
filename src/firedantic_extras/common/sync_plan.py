@@ -14,9 +14,11 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 from firedantic import to_firestore_value
+from google.cloud.firestore_v1 import DELETE_FIELD
+from google.cloud.firestore_v1.field_path import FieldPath
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Sequence
+    from collections.abc import Collection, Iterator, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -180,6 +182,12 @@ class _SyncPlan:
     #: sync_key_value → DocumentDiff; populated only when diff=True.
     diffs: dict[str, DocumentDiff] = field(default_factory=dict)
 
+    #: firestore_doc_id → field-level ``update()`` payload for each document in
+    #: :attr:`to_update`.  Populated only when fields are preserved; those
+    #: documents are updated field by field instead of replaced, so the
+    #: preserved fields are never written.
+    partial_updates: dict[str, dict[str, Any]] = field(default_factory=dict)
+
 
 # ---------------------------------------------------------------------------
 # Pure helpers
@@ -237,6 +245,55 @@ def _model_data(model_instance: Any, doc_id_field: str) -> dict[str, Any]:
     return converted
 
 
+def resolve_preserved_keys(
+    model_class: type[Any],
+    preserve_fields: Collection[str],
+    doc_id_field: str,
+) -> frozenset[str]:
+    """The stored (top-level) keys for the ``preserve_fields`` option.
+
+    A model field name resolves to the key firedantic stores it under — its
+    alias when it has one.  Any other name is taken as a stored key as-is, so
+    fields another writer adds without the model declaring them can be
+    preserved too.
+
+    Raises:
+        TypeError:  If ``preserve_fields`` is a single string.
+        ValueError: If a name is the document-ID field.
+    """
+    if isinstance(preserve_fields, str):
+        raise TypeError("preserve_fields takes a collection of field names, not a single string")
+    model_fields = getattr(model_class, "model_fields", {})
+    id_keys = {doc_id_field, _document_id_key(model_class, doc_id_field)}
+    keys: set[str] = set()
+    for name in preserve_fields:
+        if name in id_keys:
+            raise ValueError(f"preserve_fields can't include the document ID field '{name}'")
+        model_field = model_fields.get(name)
+        keys.add(getattr(model_field, "alias", None) or name)
+    return frozenset(keys)
+
+
+def _partial_update_payload(
+    existing_data: dict[str, Any],
+    incoming_data: dict[str, Any],
+) -> dict[str, Any]:
+    """The ``update()`` payload that turns *existing_data* into *incoming_data*.
+
+    Both sides already have the preserved keys removed.  Changed and new
+    fields are written whole; fields only in *existing_data* (stale ones) are
+    removed with ``DELETE_FIELD``.  Keys are quoted as field paths so a key
+    containing dots is written as one top-level field, not a nested path.
+    """
+    payload: dict[str, Any] = {}
+    for key, value in incoming_data.items():
+        if key not in existing_data or existing_data[key] != value:
+            payload[FieldPath(key).to_api_repr()] = value
+    for key in sorted(existing_data.keys() - incoming_data.keys()):
+        payload[FieldPath(key).to_api_repr()] = DELETE_FIELD
+    return payload
+
+
 # ---------------------------------------------------------------------------
 # Pure function — the heart of the sync logic
 # ---------------------------------------------------------------------------
@@ -250,6 +307,7 @@ def build_sync_plan(
     doc_id_field: str,
     delete_items: bool = False,
     diff: bool = False,
+    preserve_keys: Collection[str] = frozenset(),
 ) -> _SyncPlan:
     """Compute what needs to change.  **Pure function — no I/O.**
 
@@ -274,11 +332,17 @@ def build_sync_plan(
         diff:            When ``True``, populate :attr:`_SyncPlan.diffs` with
                          field-level :class:`DocumentDiff` objects for every
                          updated document.
+        preserve_keys:   Stored keys (see :func:`resolve_preserved_keys`) the
+                         sync never compares or writes on existing documents.
+                         When given, each update gets a field-level payload in
+                         :attr:`_SyncPlan.partial_updates` instead of
+                         replacing the whole document.
 
     Returns:
         A :class:`_SyncPlan` with the computed changes.
     """
     plan = _SyncPlan()
+    preserve_keys = frozenset(preserve_keys)
 
     for sync_key_value, desired_model in desired.items():
         if sync_key_value not in existing_raw:
@@ -293,14 +357,20 @@ def build_sync_plan(
             # a mismatch between the ID field and the stored value (common when
             # the model's id field appears in the raw dict) is never treated as
             # a data change.
-            id_keys = {doc_id_field, _document_id_key(type(desired_model), doc_id_field)}
-            existing_data = {k: v for k, v in raw.items() if k not in id_keys}
-            incoming_data = _model_data(desired_model, doc_id_field)
+            # Preserved keys are owned by another writer: dropped from both
+            # sides, so they neither trigger an update nor get overwritten.
+            ignored_keys = {doc_id_field, _document_id_key(type(desired_model), doc_id_field)} | preserve_keys
+            existing_data = {k: v for k, v in raw.items() if k not in ignored_keys}
+            incoming_data = {
+                k: v for k, v in _model_data(desired_model, doc_id_field).items() if k not in preserve_keys
+            }
 
             if incoming_data == existing_data:
                 plan.to_skip.append(sync_key_value)
             else:
                 plan.to_update.append((doc_id, desired_model))
+                if preserve_keys:
+                    plan.partial_updates[doc_id] = _partial_update_payload(existing_data, incoming_data)
                 if diff:
                     plan.diffs[sync_key_value] = _compute_field_diffs(
                         doc_id, sync_key_value, existing_data, incoming_data

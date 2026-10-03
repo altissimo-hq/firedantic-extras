@@ -5,6 +5,8 @@ Structure
 TestComputeFieldDiffs   Unit tests for the _compute_field_diffs() helper.
 TestIndexDesired        Unit tests for _index_desired().
 TestBuildSyncPlan       Unit tests for build_sync_plan() — pure, no Firestore.
+TestPreserveFields      build_sync_plan(preserve_keys=...) and
+                        resolve_preserved_keys().
 TestDuplicateKeys       _resolve_duplicates() + _reconcile_desired(), and how
                         they feed build_sync_plan for each on_duplicate_keys.
 TestSyncResult          Unit tests for SyncResult helpers.
@@ -25,6 +27,7 @@ from firedantic_extras.common.sync_plan import (
     _model_data,
     _reconcile_desired,
     _resolve_duplicates,
+    resolve_preserved_keys,
 )
 from firedantic_extras.update_collection import (
     _MISSING,
@@ -483,6 +486,105 @@ class TestBuildSyncPlan:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# TestPreserveFields — preserve_keys in build_sync_plan + key resolution
+# ---------------------------------------------------------------------------
+
+
+class Order(Model):
+    """Test-only model with a field another writer (a webhook) owns."""
+
+    __collection__ = "orders"
+
+    status: str
+    email_sent_at: str | None = None
+
+
+def _order(oid: str, status: str, email_sent_at: str | None = None) -> Order:
+    o = Order(status=status, email_sent_at=email_sent_at)
+    o.id = oid
+    return o
+
+
+def _plan_one(desired: Order, raw: dict, preserve_keys=frozenset({"email_sent_at"})):
+    return build_sync_plan(
+        desired={desired.id: desired},
+        existing_models={desired.id: desired},
+        existing_raw={desired.id: raw},
+        doc_id_field="id",
+        diff=True,
+        preserve_keys=preserve_keys,
+    )
+
+
+class TestPreserveFields:
+    def test_preserved_field_difference_alone_is_a_skip(self):
+        # The sync's model doesn't know the email was sent; the stored doc does.
+        plan = _plan_one(_order("o1", "completed"), {"status": "completed", "email_sent_at": "2026-10-01"})
+        assert plan.to_skip == ["o1"]
+        assert plan.to_update == []
+        assert plan.partial_updates == {}
+
+    def test_without_preserve_the_same_difference_overwrites(self):
+        plan = _plan_one(_order("o1", "completed"), {"status": "completed", "email_sent_at": "2026-10-01"}, frozenset())
+        assert len(plan.to_update) == 1
+        assert plan.partial_updates == {}  # full save() replaces the document
+
+    def test_update_payload_has_only_changed_unpreserved_fields(self):
+        plan = _plan_one(_order("o1", "completed"), {"status": "processing", "email_sent_at": "2026-10-01"})
+        assert [doc_id for doc_id, _ in plan.to_update] == ["o1"]
+        assert plan.partial_updates == {"o1": {"status": "completed"}}
+
+    def test_preserved_field_missing_from_document_is_not_written(self):
+        plan = _plan_one(_order("o1", "completed", email_sent_at="model-value"), {"status": "processing"})
+        assert plan.partial_updates == {"o1": {"status": "completed"}}
+
+    def test_stale_field_is_deleted_but_preserved_extra_field_is_kept(self):
+        from google.cloud.firestore_v1 import DELETE_FIELD
+
+        raw = {"status": "completed", "legacy": "x", "webhook_only": 1, "email_sent_at": None}
+        plan = _plan_one(_order("o1", "completed"), raw, frozenset({"email_sent_at", "webhook_only"}))
+        assert plan.partial_updates == {"o1": {"legacy": DELETE_FIELD}}
+
+    def test_payload_keys_are_quoted_field_paths(self):
+        plan = _plan_one(_order("o1", "completed"), {"status": "processing", "a.b": 1})
+        payload = plan.partial_updates["o1"]
+        assert set(payload) == {"status", "`a.b`"}
+
+    def test_diff_excludes_preserved_fields(self):
+        plan = _plan_one(_order("o1", "completed"), {"status": "processing", "email_sent_at": "2026-10-01"})
+        assert [c.field for c in plan.diffs["o1"].changes] == ["status"]
+
+    def test_adds_are_unaffected(self):
+        new = _order("o2", "pending", email_sent_at="model-value")
+        plan = build_sync_plan(
+            desired={"o2": new},
+            existing_models={},
+            existing_raw={},
+            doc_id_field="id",
+            preserve_keys={"email_sent_at"},
+        )
+        assert plan.to_add == [new]
+        assert plan.partial_updates == {}
+
+    def test_resolve_maps_model_fields_to_aliases_and_keeps_other_names(self):
+        from pydantic import Field
+
+        class Aliased(Model):
+            __collection__ = "aliased"
+            sent_at: str | None = Field(default=None, alias="sentAt")
+
+        assert resolve_preserved_keys(Aliased, ["sent_at", "not_on_model"], "id") == {"sentAt", "not_on_model"}
+
+    def test_resolve_rejects_document_id_field(self):
+        with pytest.raises(ValueError, match="document ID"):
+            resolve_preserved_keys(Order, ["id"], "id")
+
+    def test_resolve_rejects_a_single_string(self):
+        with pytest.raises(TypeError, match="single string"):
+            resolve_preserved_keys(Order, "email_sent_at", "id")
+
+
 def _doc(uid: str, name: str, email: str) -> _ExistingDoc:
     """One streamed document as _fetch_existing collects it: (doc_id, model, raw)."""
     return uid, _user(uid, name, email), _raw(name, email)
@@ -551,6 +653,24 @@ class TestDuplicateKeys:
         assert sorted(doc_id for doc_id, _ in plan.to_update) == ["u1", "u2"]
         assert set(plan.diffs) == {"a@e.com (doc u1)", "a@e.com (doc u2)"}
         assert plan.diffs["a@e.com (doc u2)"].doc_id == "u2"
+
+    def test_end_to_end_update_all_gets_a_payload_per_duplicate(self):
+        # u2 already matches the incoming item, so only u1 gets an update,
+        # with its own payload: partial updates are keyed by document ID.
+        index = _resolve_duplicates(_seen_with_duplicates(), key_field="email", on_duplicate_keys="update_all")
+        desired = _reconcile_desired({"a@e.com": _user("u1", "Alice Too", "a@e.com")}, index)
+
+        plan = build_sync_plan(
+            desired=desired,
+            existing_models=index.models,
+            existing_raw=index.raw,
+            doc_id_field="id",
+            preserve_keys={"active"},
+        )
+
+        assert [doc_id for doc_id, _ in plan.to_update] == ["u1"]
+        assert plan.partial_updates == {"u1": {"name": "Alice Too"}}
+        assert plan.to_skip == ["a@e.com (doc u2)"]
 
     def test_end_to_end_skip_neither_adds_updates_nor_deletes(self):
         index = _resolve_duplicates(_seen_with_duplicates(), key_field="email", on_duplicate_keys="skip")

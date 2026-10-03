@@ -36,10 +36,11 @@ from firedantic_extras.common.sync_plan import (
     _resolve_duplicates,
     _SyncPlan,
     build_sync_plan,
+    resolve_preserved_keys,
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Collection, Sequence
 
     from firedantic import AsyncBareModel
 
@@ -107,7 +108,11 @@ async def _apply_plan(
     through the model — ``save(batch=...)`` for adds and updates (a full
     ``set``, so stale fields are removed) and ``delete(batch=...)`` for
     deletes — so ID generation, aliases, stored-value conversion and
-    ``__db_config__`` routing are firedantic's.
+    ``__db_config__`` routing are firedantic's.  An update with a payload in
+    :attr:`_SyncPlan.partial_updates` (preserved fields) goes through the
+    model's ``update(batch=...)`` instead of ``save()``: a field-level write
+    of just that payload, which leaves the preserved fields as they are in
+    Firestore.
 
     Args:
         plan:          The sync plan to execute.
@@ -168,7 +173,12 @@ async def _apply_plan(
                         # have paired the item with a differently-named doc, and
                         # "update_all" pairs one item with several); a copy keeps
                         # the caller's instance untouched.
-                        await model_instance.model_copy(update={doc_id_field: doc_id}).save(batch=batch)
+                        target = model_instance.model_copy(update={doc_id_field: doc_id})
+                        payload = plan.partial_updates.get(doc_id)
+                        if payload is None:
+                            await target.save(batch=batch)
+                        else:
+                            await target.update(payload, batch=batch)
                     result.updates += 1
                     batch_count += 1
                 except Exception as exc:
@@ -233,6 +243,16 @@ class AsyncCollectionSync:
                             (default), ``"collect"``, or ``"skip"``.
         chunk_size:         Maximum operations per Firestore batch write.
                             Capped at 500 (Firestore hard limit).
+        preserve_fields:    Top-level fields another writer owns.  On
+                            existing documents they are never compared or
+                            written: they don't trigger updates or count as
+                            stale, and updates write only the changed
+                            fields (a field-level ``update()`` instead of a
+                            full ``set``), so a concurrent write to a
+                            preserved field is kept.  New documents are
+                            still written whole, with the model's values.
+                            Model field names resolve to their aliases;
+                            other names are taken as stored keys.
 
     Example::
 
@@ -252,6 +272,11 @@ class AsyncCollectionSync:
             User, desired, delete_items=True, diff=True, dry_run=True,
         )
         print(result.summary())
+
+        # Keep fields a webhook writes, e.g. email bookkeeping.
+        result = await AsyncCollectionSync.sync(
+            Order, desired, preserve_fields=["delivered_email_sent_at"],
+        )
     """
 
     def __init__(
@@ -267,6 +292,7 @@ class AsyncCollectionSync:
         on_duplicate_keys: OnDuplicateKeys = "raise",
         on_error: OnError = "raise",
         chunk_size: int = 500,
+        preserve_fields: Collection[str] = (),
     ) -> None:
         self._model = model
         self._items = list(items)
@@ -278,6 +304,8 @@ class AsyncCollectionSync:
         self._on_duplicate_keys = on_duplicate_keys
         self._on_error = on_error
         self._chunk_size = min(chunk_size, 500)  # enforce Firestore hard limit
+        # Resolved up front so a bad name fails before anything is read.
+        self._preserve_keys = resolve_preserved_keys(model, preserve_fields, model.__document_id__)
 
     async def run(self) -> SyncResult:
         """Execute the sync and return a :class:`SyncResult`.
@@ -305,6 +333,7 @@ class AsyncCollectionSync:
             doc_id_field=doc_id_field,
             delete_items=self._delete_items,
             diff=self._diff,
+            preserve_keys=self._preserve_keys,
         )
 
         if self._output_writer:
