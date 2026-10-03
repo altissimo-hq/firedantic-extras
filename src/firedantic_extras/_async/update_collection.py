@@ -108,10 +108,11 @@ async def _apply_plan(
     through the model — ``save(batch=...)`` for adds and updates (a full
     ``set``, so stale fields are removed) and ``delete(batch=...)`` for
     deletes — so ID generation, aliases, stored-value conversion and
-    ``__db_config__`` routing are firedantic's.  The exception is an update
-    with a payload in :attr:`_SyncPlan.partial_updates` (preserved fields): it
-    is a field-level ``update()`` of the model's document reference, which
-    leaves the preserved fields as they are in Firestore.
+    ``__db_config__`` routing are firedantic's.  An update with a payload in
+    :attr:`_SyncPlan.partial_updates` (preserved fields) goes through the
+    model's ``update(batch=...)`` instead of ``save()``: a field-level write
+    of just that payload, which leaves the preserved fields as they are in
+    Firestore.
 
     Args:
         plan:          The sync plan to execute.
@@ -177,7 +178,7 @@ async def _apply_plan(
                         if payload is None:
                             await target.save(batch=batch)
                         else:
-                            batch.update(target._get_doc_ref(), payload)
+                            await target.update(payload, batch=batch)
                     result.updates += 1
                     batch_count += 1
                 except Exception as exc:
