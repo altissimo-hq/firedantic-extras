@@ -440,7 +440,12 @@ class TestCollectionSyncEndToEnd:
         from firedantic.configurations import configuration as cfg
 
         doc_ref = cfg.get_client().collection(f"{COLLECTION_PREFIX}orders").document("o1")
-        doc_ref.update({"email_sent_at": "2026-10-01", "audit": "webhook", "legacy": "stale"})
+        # set(merge=True) takes keys literally, so "stale.dotted" is one
+        # top-level field, not a nested path.
+        doc_ref.set(
+            {"email_sent_at": "2026-10-01", "audit": "webhook", "legacy": "stale", "stale.dotted": 1},
+            merge=True,
+        )
 
         result = CollectionSync.sync(
             Order,
@@ -451,7 +456,7 @@ class TestCollectionSyncEndToEnd:
         )
 
         assert result.updates == 1
-        assert {c.field for c in result.diffs["o1"].changes} == {"status", "legacy"}
+        assert {c.field for c in result.diffs["o1"].changes} == {"status", "legacy", "stale.dotted"}
         stored = (doc_ref.get()).to_dict()
         assert stored == {"status": "completed", "email_sent_at": "2026-10-01", "audit": "webhook"}
 

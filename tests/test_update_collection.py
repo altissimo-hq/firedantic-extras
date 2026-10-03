@@ -654,6 +654,24 @@ class TestDuplicateKeys:
         assert set(plan.diffs) == {"a@e.com (doc u1)", "a@e.com (doc u2)"}
         assert plan.diffs["a@e.com (doc u2)"].doc_id == "u2"
 
+    def test_end_to_end_update_all_gets_a_payload_per_duplicate(self):
+        # u2 already matches the incoming item, so only u1 gets an update,
+        # with its own payload: partial updates are keyed by document ID.
+        index = _resolve_duplicates(_seen_with_duplicates(), key_field="email", on_duplicate_keys="update_all")
+        desired = _reconcile_desired({"a@e.com": _user("u1", "Alice Too", "a@e.com")}, index)
+
+        plan = build_sync_plan(
+            desired=desired,
+            existing_models=index.models,
+            existing_raw=index.raw,
+            doc_id_field="id",
+            preserve_keys={"active"},
+        )
+
+        assert [doc_id for doc_id, _ in plan.to_update] == ["u1"]
+        assert plan.partial_updates == {"u1": {"name": "Alice Too"}}
+        assert plan.to_skip == ["a@e.com (doc u2)"]
+
     def test_end_to_end_skip_neither_adds_updates_nor_deletes(self):
         index = _resolve_duplicates(_seen_with_duplicates(), key_field="email", on_duplicate_keys="skip")
         desired = _reconcile_desired({"a@e.com": _user("u1", "Alice Renamed", "a@e.com")}, index)
