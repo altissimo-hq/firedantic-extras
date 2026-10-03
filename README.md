@@ -665,6 +665,41 @@ from firedantic_extras import AsyncCollectionSync
 result = await AsyncCollectionSync.sync(User, desired, delete_items=True, diff=True)
 ```
 
+### Preserving fields another writer owns
+
+Sometimes a collection mirrors an external source but also carries a few fields
+your own code writes, e.g. a webhook recording when a notification email went
+out. A plain sync replaces each changed document, so it would wipe those
+fields, and reading them first to copy them across still loses a write that
+lands between the sync's read and its commit.
+
+Name those fields in `preserve_fields`:
+
+```python
+result = CollectionSync.sync(
+    Order,
+    orders_from_api,                 # email_sent_at is None on all of these
+    delete_items=True,
+    preserve_fields=["email_sent_at", "email_skipped_reason"],
+)
+```
+
+On existing documents, preserved fields are dropped from both sides of the
+comparison: a difference in them alone is a skip, they never count as stale,
+and they don't appear in `diffs`. A document that does need updating gets a
+field-level `update()` with only its changed fields (stale ones removed with
+`DELETE_FIELD`) instead of a full `set`, so whatever is stored in the
+preserved fields, including a write made while the sync runs, is kept.
+
+- Model field names resolve to their aliases. Any other name is taken as a
+  stored key, so fields the model doesn't declare can be preserved too.
+- Only top-level fields; a name with dots is one field, not a nested path.
+- New documents are written whole, with the model's values for the preserved
+  fields.
+- `delete_items=True` still deletes whole documents, preserved fields included.
+- A field-level `update()` fails if the document is deleted after the sync
+  read it, which fails that batch commit; a plain sync would recreate it.
+
 ### API Reference
 
 #### `CollectionSync` / `AsyncCollectionSync`
@@ -686,6 +721,7 @@ class CollectionSync:
         on_duplicate_keys: OnDuplicateKeys = "raise",
         on_error: OnError = "raise",
         chunk_size: int = 500,
+        preserve_fields: Collection[str] = (),
     ) -> None: ...
 
     def run(self) -> SyncResult:
@@ -719,6 +755,7 @@ class CollectionSync:
 | `on_duplicate_keys` | `"raise"`    | What to do when `sync_key` matches >1 existing doc: `"raise"` aborts; `"skip"` leaves those docs _and_ the incoming item untouched (listed in `result.skipped_duplicate_keys`); `"update_all"` writes the incoming item to every matching doc |
 | `on_error`          | `"raise"`    | Per-document error strategy: `"raise"`, `"collect"`, or `"skip"`                                                          |
 | `chunk_size`        | `500`        | Max operations per Firestore batch write (capped at 500)                                                                  |
+| `preserve_fields`   | `()`         | Top-level fields another writer owns; see [Preserving fields](#preserving-fields-another-writer-owns). Existing documents are updated field by field and these fields are never compared or written |
 | `output_writer`     | `print`      | Callable for progress output; pass `None` to suppress                                                                     |
 
 <!-- markdownlint-enable MD033 -->
@@ -785,6 +822,7 @@ def build_sync_plan(
     doc_id_field: str,
     delete_items: bool = False,
     diff: bool = False,
+    preserve_keys: Collection[str] = frozenset(),
 ) -> _SyncPlan:
     """Compute adds/updates/deletes/skips from pure data — no Firestore calls."""
 ```

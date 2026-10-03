@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `CollectionSync` / `AsyncCollectionSync` take `preserve_fields`: top-level
+  fields another writer owns, such as a webhook's bookkeeping. On existing
+  documents they are never compared or written; a document that needs updating
+  gets a field-level `update()` of its changed fields instead of a full `set`,
+  so the preserved fields keep whatever is stored, including writes made while
+  the sync runs. `build_sync_plan` takes the matching `preserve_keys`.
+
 ## [0.3.1] - 2026-09-28
 
 ### Added
