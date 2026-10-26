@@ -6,6 +6,25 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-26
+
+### Changed
+
+- Requires `altissimo-firedantic` 0.23 (was 0.22), which needs Python 3.11 or
+  later.
+
+### Removed
+
+- Python 3.10 support. Python 3.10 reached end of life in October 2026, and
+  `altissimo-firedantic` 0.23 dropped it. pip on Python 3.10 keeps installing
+  0.4.0.
+
+### Security
+
+- Updated development dependencies in `poetry.lock` with known vulnerabilities:
+  `virtualenv` 21.14.13, `certifi` 2026.10.23 (GHSA-6q48-6c7w-9gw2) and
+  `filelock` 4.2.4.
+
 ## [0.4.0] - 2026-10-03
 
 ### Added
@@ -152,7 +171,8 @@ later, installed from GitHub (the fork is not on PyPI).
 
 No changelog was kept; see the git history.
 
-[Unreleased]: https://github.com/altissimo-hq/firedantic-extras/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/altissimo-hq/firedantic-extras/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/altissimo-hq/firedantic-extras/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/altissimo-hq/firedantic-extras/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/altissimo-hq/firedantic-extras/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/altissimo-hq/firedantic-extras/compare/v0.2.1...v0.3.0
